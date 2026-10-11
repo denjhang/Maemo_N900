@@ -178,3 +178,14 @@
 - push：直连被重置、7890 不通，**必须走 `http.proxy=http://127.0.0.1:7892`**
   （github-accel 技能记载的 push 专线）
 - 远程：https://github.com/denjhang/Maemo_N900 (main)
+
+## 八、PYMO 考证（2026-10-11 付费搜索查证）
+- **PYMO** = "手机上的 GalGame 引擎"，官网 pymogames.com
+- 本质：用 **Python（PyS60）写的 ONScripter 解释器**——不是原生 C 移植！
+  基于 skydark 的 eustia-test0.04 / 枫笛 1.5 版 ONS 移植脚本发展而来
+- 平台：塞班 S60v3/v5（PyS60）+ Android，跨平台；能完整输出语音和立绘
+- 意义：证明 PyS60 在 S60v3 300-400MHz ARM11 上跑得动 ONS 文字游戏，
+  塞班"Python 上限很高"的用户记忆属实
+- 相关：原生 C 路线的 ONScripter 官方移植覆盖 Win/Linux/Android/iOS/PSP 等
+  （GPL，AUR 有 onscripter-en 包）；KiriKiri 系有 Kirikiroid 血统延续至安卓
+- 启示：N900（A8 + 真 Linux）跑 ONScripter 引擎同理没有障碍
