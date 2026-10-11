@@ -495,3 +495,15 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   加 YM2612(MAME整数核,deadbeef 参考)二引擎、混响等全部解锁
 - 血统谱系：74 门电路 PSG/WSG → C251 全速 YM2413 → STC32G 六核博物馆 →
   N900 VGM 引擎（架构同源，镣铐逐代放宽）
+
+### 廿二补充：YM2413 重写规模 + SID + USB 声卡化（144K246 最新状态）
+- **YM2413 核心几乎全重写：359 行**（MAME 原版 ~2000 行 / emu2413 ~900 行）
+  核心手法 = `conv_vol[32][64]` 预计算表把 sin×电平融为一次查表，**运行时零乘法**；
+  包络轮询分摊（每 tick 一通道）；feedback 移位代替除法——C251 查表法的体系化
+- **C64 SID 核已上板**：usb_cdc_test/src/sid.c + sid_filter_table.h +
+  sid_tables_code.h，配 SID_HANDOFF/INTEGRATION_STATUS/REFERENCE_COMPARE 三文档
+  （模拟滤波器查表化）
+- **出声形态升级**：22050Hz + USB CDC 纯源码声卡（无 LIB 依赖）——
+  72MHz 超频的 144K246 现在是 USB 声卡形态的八芯片合成器
+- 结论强化：N900 引擎的合成核 = 直接沿用这套"查表融乘"范式；
+  STC 版核心可移植性=纯 C，几乎免改造
