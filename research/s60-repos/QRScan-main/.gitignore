@@ -1,0 +1,98 @@
+# ─── Android ────────────────────────────────────────────────────────────────
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+android/build/
+android-legacy/build/
+android/**/build/
+android-legacy/**/build/
+android/**/*.apk
+android/**/*.aab
+android/**/*.ap_
+android/**/*.dex
+android/**/captures/
+android/**/.externalNativeBuild/
+android/**/.cxx/
+android/**/generated/
+
+# ─── iOS / iPhoneOS ─────────────────────────────────────────────────────────
+ios/.build/
+ios/build/
+ios/*.xcworkspace/xcuserdata/
+ios/*.xcodeproj/xcuserdata/
+ios/DerivedData/
+ios/*.ipa
+ios/*.dSYM.zip
+ios/*.dSYM
+iphoneos/.build/
+iphoneos/build/
+iphoneos/*.xcworkspace/xcuserdata/
+iphoneos/*.xcodeproj/xcuserdata/
+iphoneos/DerivedData/
+iphoneos/*.ipa
+
+# ─── Swift Package Manager ───────────────────────────────────────────────────
+ios/.swiftpm/
+ios/Package.resolved
+
+# ─── Symbian ─────────────────────────────────────────────────────────────────
+symbian/*.sis
+symbian/*.sisx
+symbian/build/
+symbian/epoc32/
+
+# ─── BlackBerry ──────────────────────────────────────────────────────────────
+blackberry/*.cod
+blackberry/*.jad
+blackberry/*.jar
+blackberry/deliverables/
+blackberry/build/
+
+# ─── Samsung Bada ────────────────────────────────────────────────────────────
+bada/*.wgt
+bada/Debug/
+bada/Release/
+
+# ─── postmarketOS ────────────────────────────────────────────────────────────
+postmarketos/build/
+postmarketos/__pycache__/
+
+# ─── General ─────────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*.swp
+*.orig
+*.rej
+Thumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+*.class
+*.o
+*.so
+*.dylib
+*.a
+*.out
+*.exe
+*.zip
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# ─── CI / secrets ────────────────────────────────────────────────────────────
+.env
+.env.*
+secrets/
+keystore.properties
+release.keystore
+*.p12
+*.mobileprovision
+*.provisionprofile

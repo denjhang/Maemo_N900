@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">QRScan</string>
+    <string name="camera_error">Camera unavailable on this device.</string>
+    <string name="no_qr_found">No QR code found in image.</string>
+    <string name="copied">Copied to clipboard.</string>
+    <string name="saved">Saved to gallery.</string>
+    <string name="save_failed">Failed to save image.</string>
+    <string name="pick_image">Pick Image</string>
+    <string name="flash">Flash</string>
+    <string name="flash_on">Flash ON</string>
+    <string name="flash_off">Flash OFF</string>
+    <string name="history">History</string>
+    <string name="create">Create QR</string>
+    <string name="copy">Copy</string>
+    <string name="open_url">Open URL</string>
+    <string name="share">Share</string>
+    <string name="generate">Generate</string>
+    <string name="result">Result</string>
+    <string name="content_hint">Enter text, URL, Wi-Fi, vCard&#8230;</string>
+    <string name="format_label">Format</string>
+    <string name="clear_history">Clear History</string>
+    <string name="no_history">No scan history yet.</string>
+    <string name="about">QRScan v1.0.0 &#8226; GPL-3.0 &#8226; Hexadecinull</string>
+</resources>

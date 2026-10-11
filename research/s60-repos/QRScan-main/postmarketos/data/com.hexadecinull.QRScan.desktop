@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=QRScan
+GenericName=QR Code Scanner
+Comment=Free, open source QR code scanner and creator
+Exec=qrscan %U
+Icon=com.hexadecinull.QRScan
+Terminal=false
+Type=Application
+Categories=Utility;Scanner;
+Keywords=QR;barcode;scanner;creator;code;
+MimeType=image/jpeg;image/png;image/webp;image/bmp;
+StartupNotify=true
+StartupWMClass=qrscan

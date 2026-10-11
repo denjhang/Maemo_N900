@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="com.hexadecinull.QRScan" path="/com/hexadecinull/QRScan/">
+
+    <key name="haptics" type="b">
+      <default>true</default>
+      <summary>Haptic feedback</summary>
+      <description>Vibrate on successful scan.</description>
+    </key>
+
+    <key name="save-history" type="b">
+      <default>true</default>
+      <summary>Save scan history</summary>
+      <description>Persist scanned results to local database.</description>
+    </key>
+
+    <key name="beep-on-scan" type="b">
+      <default>false</default>
+      <summary>Beep on scan</summary>
+      <description>Play an audible beep on successful scan.</description>
+    </key>
+
+    <key name="theme" type="s">
+      <default>'system'</default>
+      <summary>Color theme</summary>
+      <description>One of: system, light, dark.</description>
+    </key>
+
+    <key name="last-used-format" type="s">
+      <default>'QR_CODE'</default>
+      <summary>Last used barcode format in creator</summary>
+      <description>Persists the format picker state in the creator dialog.</description>
+    </key>
+
+  </schema>
+</schemalist>

@@ -1,0 +1,108 @@
+name: Bug Report
+description: Report a bug in QRScan
+title: "[BUG] "
+labels: ["bug", "needs-triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to file a bug report. Please fill in as much detail as possible.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Which platform are you experiencing the bug on?
+      options:
+        - Android (API 21+)
+        - Android Legacy (API 7–20)
+        - iOS / iPadOS
+        - iPhoneOS Classic (Objective-C)
+        - BlackBerry OS
+        - Samsung Bada
+        - Symbian
+        - postmarketOS
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version
+      description: e.g. Android 14, iOS 17.4, BB OS 7.1
+      placeholder: Android 14
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: e.g. POCO X7 Pro, iPhone 15, BlackBerry Bold 9900
+      placeholder: POCO X7 Pro
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: QRScan Version
+      description: e.g. v1.2.0
+      placeholder: v1.2.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Stack Trace
+      description: Paste any relevant logs or crash output here.
+      render: shell
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I have read the CONTRIBUTING guide.
+          required: true

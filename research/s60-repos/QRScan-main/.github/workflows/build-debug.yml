@@ -1,0 +1,223 @@
+name: Build Debug
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'fix/**' ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android-debug:
+    name: Android Debug Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+
+      - name: Build Android Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload Android Debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-debug-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+  build-android-legacy-debug:
+    name: Android Legacy Debug Build (API 7–20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v6
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x android-legacy/gradlew
+
+      - name: Build Android Legacy Debug APK
+        run: |
+          cd android-legacy
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload Android Legacy Debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-legacy-debug-${{ github.sha }}
+          path: android-legacy/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+  build-ios-debug:
+    name: iOS Debug Build
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Resolve Swift packages
+        run: |
+          cd ios
+          xcodebuild -resolvePackageDependencies \
+            -scheme QRScan \
+            -destination 'platform=iOS Simulator,name=iPhone 15'
+
+      - name: Build iOS Debug
+        run: |
+          cd ios
+          xcodebuild \
+            -scheme QRScan \
+            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty
+
+      - name: Upload iOS Debug build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-debug-log-${{ github.sha }}
+          path: ~/Library/Logs/DiagnosticReports/
+          retention-days: 3
+
+  build-iphoneos-debug:
+    name: iPhoneOS Classic Debug Build (ObjC)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build iPhoneOS Classic Debug
+        run: |
+          cd iphoneos
+          xcodebuild \
+            -scheme QRScanClassic \
+            -destination 'platform=iOS Simulator,name=iPhone 15' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty
+
+  build-blackberry-debug:
+    name: BlackBerry Debug Build (stub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v6
+        with:
+          java-version: '8'
+          distribution: 'temurin'
+
+      - name: Compile BlackBerry sources
+        run: |
+          mkdir -p blackberry/build/classes
+          find blackberry/src -name "*.java" -print0 | xargs -0 javac \
+            -source 1.4 -target 1.4 \
+            -d blackberry/build/classes
+
+      - name: Package JAR
+        run: |
+          cd blackberry/build
+          jar cf QRScan-bb-debug.jar -C classes .
+
+      - name: Upload BlackBerry JAR
+        uses: actions/upload-artifact@v7
+        with:
+          name: blackberry-debug-${{ github.sha }}
+          path: blackberry/build/QRScan-bb-debug.jar
+          retention-days: 7
+
+  build-postmarketos-debug:
+    name: postmarketOS Debug Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install GTK4 build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-4-dev \
+            libzbar-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            meson \
+            ninja-build
+
+      - name: Configure postmarketOS build
+        run: |
+          cd postmarketos
+          meson setup builddir --buildtype=debug
+
+      - name: Build postmarketOS debug
+        run: |
+          cd postmarketos
+          ninja -C builddir
+
+      - name: Upload postmarketOS binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: postmarketos-debug-${{ github.sha }}
+          path: postmarketos/builddir/qrscan
+          retention-days: 7

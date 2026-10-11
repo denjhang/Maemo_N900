@@ -1,0 +1,75 @@
+# ─── Default ─────────────────────────────────────────────────────────────────
+*                   text=auto eol=lf
+
+# ─── Source code ─────────────────────────────────────────────────────────────
+*.java              text eol=lf
+*.kt                text eol=lf
+*.kts               text eol=lf
+*.swift             text eol=lf
+*.m                 text eol=lf
+*.h                 text eol=lf
+*.cpp               text eol=lf
+*.c                 text eol=lf
+*.py                text eol=lf
+*.sh                text eol=lf
+*.bash              text eol=lf
+*.gradle            text eol=lf
+*.gradle.kts        text eol=lf
+*.xml               text eol=lf
+*.json              text eol=lf
+*.yaml              text eol=lf
+*.yml               text eol=lf
+*.md                text eol=lf
+*.txt               text eol=lf
+*.properties        text eol=lf
+*.pro               text eol=lf
+*.plist             text eol=lf
+*.pbxproj           text eol=lf merge=union
+*.storyboard        text eol=lf
+*.xib               text eol=lf
+*.html              text eol=lf
+*.css               text eol=lf
+*.js                text eol=lf
+*.ts                text eol=lf
+*.mmp               text eol=lf
+*.cpp               text eol=lf
+*.pkg               text eol=lf
+
+# ─── Windows scripts (forced CRLF) ───────────────────────────────────────────
+*.bat               text eol=crlf
+*.cmd               text eol=crlf
+*.ps1               text eol=crlf
+
+# ─── Binary assets ───────────────────────────────────────────────────────────
+*.png               binary
+*.jpg               binary
+*.jpeg              binary
+*.gif               binary
+*.ico               binary
+*.webp              binary
+*.ttf               binary
+*.otf               binary
+*.woff              binary
+*.woff2             binary
+*.apk               binary
+*.aab               binary
+*.ipa               binary
+*.sis               binary
+*.sisx              binary
+*.cod               binary
+*.jar               binary
+*.wgt               binary
+*.zip               binary
+*.tar.gz            binary
+*.7z                binary
+*.aar               binary
+*.keystore          binary
+*.p12               binary
+*.mobileprovision   binary
+*.xcassets          binary
+
+# ─── Linguist (GitHub language detection) ────────────────────────────────────
+*.md                linguist-documentation
+docs/**             linguist-documentation
+*.gradle            linguist-language=Groovy
+*.gradle.kts        linguist-language=Kotlin

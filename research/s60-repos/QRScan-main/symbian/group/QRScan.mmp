@@ -1,0 +1,31 @@
+TARGET          QRScan.exe
+TARGETTYPE      exe
+UID             0x100039CE 0xE1234567
+
+SOURCEPATH      ..\src
+SOURCE          QRScanApp.cpp
+SOURCE          QRScanAppUi.cpp
+SOURCE          QRScanView.cpp
+SOURCE          QRScanContainer.cpp
+
+USERINCLUDE     ..\src
+SYSTEMINCLUDE   \epoc32\include
+SYSTEMINCLUDE   \epoc32\include\mw
+SYSTEMINCLUDE   \epoc32\include\platform\mw
+
+LIBRARY         euser.lib
+LIBRARY         apparc.lib
+LIBRARY         cone.lib
+LIBRARY         eikcore.lib
+LIBRARY         eikcoctl.lib
+LIBRARY         eikctl.lib
+LIBRARY         avkon.lib
+LIBRARY         aknnotify.lib
+LIBRARY         ecam.lib
+LIBRARY         fbscli.lib
+LIBRARY         bitgdi.lib
+LIBRARY         gdi.lib
+LIBRARY         ws32.lib
+
+CAPABILITY      ReadUserData WriteUserData UserEnvironment
+LANG            SC

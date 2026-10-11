@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">QRScan</string>
+    <string name="camera_permission_rationale">Camera access is required to scan QR codes.\nPlease grant permission to continue.</string>
+    <string name="storage_permission_rationale">Storage access is required to open images from your gallery.</string>
+
+    <string name="scan_tab">Scan</string>
+    <string name="create_tab">Create</string>
+    <string name="history_tab">History</string>
+    <string name="favorites_tab">Favorites</string>
+    <string name="settings_tab">Settings</string>
+
+    <string name="copy">Copy</string>
+    <string name="share">Share</string>
+    <string name="open_browser">Open in browser</string>
+    <string name="add_favorite">Add to favorites</string>
+    <string name="remove_favorite">Remove from favorites</string>
+    <string name="edit">Edit</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="clear_history">Clear history</string>
+    <string name="generate">Generate</string>
+    <string name="export">Export</string>
+
+    <string name="copied">Copied to clipboard</string>
+    <string name="saved_to_gallery">Saved to gallery</string>
+    <string name="save_failed">Failed to save image</string>
+
+    <string name="theme_label">Theme</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_system">Follow system</string>
+    <string name="material_you_label">Material You</string>
+    <string name="material_you_desc">Dynamic color from wallpaper</string>
+    <string name="haptics_label">Haptic feedback</string>
+    <string name="haptics_desc">Vibrate on successful scan</string>
+    <string name="history_toggle_label">Save scan history</string>
+    <string name="history_toggle_desc">Store scans locally on device</string>
+    <string name="beep_label">Beep on scan</string>
+    <string name="about_label">About QRScan</string>
+    <string name="about_desc">Version 1.0.0  •  GPL-3.0  •  Hexadecinull</string>
+
+    <string name="format_qr_code">QR Code</string>
+    <string name="format_data_matrix">Data Matrix</string>
+    <string name="format_aztec">Aztec</string>
+    <string name="format_pdf_417">PDF 417</string>
+    <string name="format_code_128">Code 128</string>
+    <string name="format_code_39">Code 39</string>
+    <string name="format_ean_13">EAN-13</string>
+    <string name="format_ean_8">EAN-8</string>
+
+    <string name="content_hint">Enter URL, text, Wi-Fi credentials, vCard…</string>
+    <string name="format_label">Barcode format</string>
+
+    <string name="history_empty">No scans yet.\nPoint the camera at a QR code to start.</string>
+    <string name="favorites_empty">No favorites yet.\nTap the heart icon on a result to add one.</string>
+
+    <string name="file_provider_authority" translatable="false">com.hexadecinull.qrscan.fileprovider</string>
+</resources>

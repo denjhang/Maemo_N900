@@ -1,0 +1,85 @@
+
+if(COMMAND cmake_policy AND POLICY CMP0042)
+       cmake_policy (SET CMP0042 NEW)
+endif(COMMAND cmake_policy AND POLICY CMP0042)
+
+LINK_DIRECTORIES( ${EXPAT_LIBRARY_DIRS} )
+
+INCLUDE_DIRECTORIES( ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR} ${EXPAT_INCLUDE_DIRS} )
+
+SET( libwbxml_LIB_SRCS
+	wbxml_base64.c
+	wbxml_buffers.c
+	wbxml_charset.c
+	wbxml_conv.c
+	wbxml_elt.c
+	wbxml_encoder.c
+	wbxml_errors.c
+	wbxml_lists.c
+	wbxml_log.c
+	wbxml_mem.c
+	wbxml_parser.c
+	wbxml_tables.c
+	wbxml_tree.c
+	wbxml_tree_clb_wbxml.c
+	wbxml_tree_clb_xml.c
+)
+
+IF(BUILD_SHARED_LIBS)
+	ADD_LIBRARY( wbxml2 SHARED ${libwbxml_LIB_SRCS} )
+
+	SET_TARGET_PROPERTIES( wbxml2 PROPERTIES SOVERSION ${LIBWBXML_LIBVERSION_SOVERSION} )
+	SET_TARGET_PROPERTIES( wbxml2 PROPERTIES VERSION ${LIBWBXML_LIBVERSION_VERSION} )
+	TARGET_LINK_LIBRARIES( wbxml2 PRIVATE ${EXPAT_LIBRARIES} )
+
+	INSTALL( TARGETS wbxml2
+   	   RUNTIME DESTINATION ${LIBWBXML_BIN_DIR}
+   	   LIBRARY DESTINATION ${LIBWBXML_LIBRARIES_DIR}
+   	   ARCHIVE DESTINATION ${LIBWBXML_LIBRARIES_DIR}
+	)
+ENDIF()
+
+IF(BUILD_STATIC_LIBS)
+	ADD_LIBRARY( wbxml2_static STATIC ${libwbxml_LIB_SRCS} )
+
+	SET_TARGET_PROPERTIES( wbxml2_static PROPERTIES SOVERSION ${LIBWBXML_LIBVERSION_SOVERSION} )
+	SET_TARGET_PROPERTIES( wbxml2_static PROPERTIES VERSION ${LIBWBXML_LIBVERSION_VERSION} )
+	TARGET_LINK_LIBRARIES( wbxml2_static PRIVATE ${EXPAT_LIBRARIES} )
+	SET_TARGET_PROPERTIES( wbxml2_static PROPERTIES OUTPUT_NAME wbxml2 )
+
+	INSTALL( TARGETS wbxml2_static
+   	   RUNTIME DESTINATION ${LIBWBXML_BIN_DIR}
+   	   LIBRARY DESTINATION ${LIBWBXML_LIBRARIES_DIR}
+   	   ARCHIVE DESTINATION ${LIBWBXML_LIBRARIES_DIR}
+	)
+ENDIF()
+
+
+INSTALL( FILES
+	wbxml.h
+	${CMAKE_CURRENT_BINARY_DIR}/../wbxml_config.h
+	wbxml_conv.h
+	wbxml_defines.h
+	wbxml_errors.h
+	DESTINATION ${LIBWBXML_INCLUDE_DIR}/wbxml
+)
+
+IF(WBXML_INSTALL_FULL_HEADERS)
+    INSTALL( FILES
+        wbxml_base64.h
+        wbxml_buffers.h
+        wbxml_charset.h
+        wbxml_elt.h
+        wbxml_encoder.h
+        wbxml_handlers.h
+        wbxml_lists.h
+        wbxml_log.h
+        wbxml_mem.h
+        wbxml_parser.h
+        wbxml_tables.h
+        wbxml_tree.h
+        wbxml_tree_clb_wbxml.h
+        wbxml_tree_clb_xml.h
+        DESTINATION ${LIBWBXML_INCLUDE_DIR}/wbxml
+    )
+ENDIF()

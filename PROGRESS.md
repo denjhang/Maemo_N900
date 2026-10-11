@@ -283,3 +283,134 @@ inbox/s60v3-emulators/ 四件套（E72 等 v3 机型实测可跑）：
 学习点：这些在无 GPU、220-434MHz v3 机器上全速的移植，核心技巧=
 手写 ARM 动态重编译 + 定点数 + 精简显存路径。对 N900 上的
 C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数实现）同理。
+
+## 十五、前端选型决议 + 硬件加速真相（2026-10-12 讨论定案）
+### 前端选型（用户拍板）
+- **SDL 是正桥，GTK 是古董——不碰**。Qt 只在贡献 NIKINIKI 时才学
+- 候补现代方案：Dear ImGui 风格 immediate-mode 手绘（叠加在 SDL1.2+GLES 上）；
+  TUI/ncurses 保底
+- 音乐播放器形态：VGM 核心编成解码模块 + SDL 画界面 + pulse 出声，
+  键盘快捷键（空格暂停/方向键切曲）。furnace tracker 移植 = 自己找罪受，放弃
+
+### N900 硬件加速家底（设备实测）
+- SGX530 全套在位：libGLES_CM(ES1.1)、libGLESv2(ES2.0)、libEGL、
+  **libSDL_gles**（SDL 的 GLES 上下文，已装）、Clutter eglx
+- 加速表：SDL1.2 普通 ✗ | SDL_gles ✓ | Clutter ✓ | Qt4 半残 | C 直写 EGL 完全体
+- **pygame 卡顿根治判断**：卡顿 = 画图开销(大头,GPU可根治) + Python解释开销
+  (小头,GPU管不着)。pygame 无 GLES 后端 → Python 只能治一半；
+  **根治 = C + GLES1.1 固定管线重写渲染**，逻辑照抄 pygame 版
+- 决议：skyraid C 版直接 GLES 渲染，跳过 SDL 软绘
+
+### 塞班分世代图形路线
+- S^3/Anna/Belle：Qt4.7+/QML（NIKINIKI 模式），GPU=BCM2727 VideoCore III
+  （GLES1.1/2.0+OpenVG），健康度最高
+- S60v5：**多数机型无 3D GPU**（5800/N97），正解 = Avkon C++ / Open C / J2ME；
+  Qt4.6 可装
+- S60v3：分裂——N95/N82 有 PowerVR MBX(GLES1.1 固定管线)，海量中低端无 GPU；
+  **J2ME 是 v3 游戏绝对王者**（MIDP2），原生走 AVKON/Open C
+- **统一战线**：C/SDL 核心一份 → N900 直编 + 塞班走 SDL_Symbian(Summeli 移植层，
+  ONScripter 同款路线) + Leste N9 还是 SDL。三平台各配薄渲染壳
+
+### 安卓双系统为何比 Maemo 流畅（架构代差，非优化强）
+1. 图形：安卓 2.x SurfaceFlinger+SGX 硬件合成 vs Maemo GTK+X11 纯 CPU 软绘
+2. 事件：安卓为触摸而生 vs Maemo 背 X11+GTK 桌面 legacy
+3. 内存：安卓激进 LMK 保前台 vs Maemo 万物常驻摊薄 235MB
+4. 结论：Maemo=桌面 Linux 缩小塞手机，安卓=围手机从头造。
+   SDL 路线 = 绕开桌面遗产、最接近安卓式的 Maemo 开发
+
+### N9/MeeGo 备忘
+- N9 开发 = Qt4.7+QML，aegis 沙箱；NIKINIKI 的 Qt 功夫直接迁移
+- 历史：2011 燃烧平台转向 WP，Qt 战略作废；若全力押 Qt，塞班^3 与 MeeGo
+  同技能栈平滑过渡。N9 = 发布即葬礼的绝唱；社区续作为 Maemo Leste
+
+## 十六、PyS60 能力全谱（给塞班 agent 用的 API 底牌）
+- 系统级：完整文件系统(os/shutil 直达 C:/E:)、e32.drive_list、set_home_time、
+  sysinfo(电量/信号/IMEI)；官方发过 PythonScriptShell_2.0.0_high_capas.sis
+  高权限变体 → "Python 清扫系统目录"坐实
+- 通信：inbox 读短信、messaging 发短信/彩信、telephone 拨号、logs 通话记录、
+  contacts 通讯录、calendar 日历
+- 硬件：camera 拍照、sensor 加速度计、location 基站定位、positioning GPS、
+  topwindow 悬浮层、keycapture 全局按键、profile 情景模式、audio 录音
+- 网络：socket/ssl、蓝牙 RFCOMM/OBEX（官方 BT console）、红外、e32db
+- 上限判断：GUI=Canvas 手绘(简陋但能用)；游戏=2D 软绘 10-15fps；
+  VGM 实时合成=不可能(无裸 PCM 输出+FM 算不动) → 塞班播放器只能放预转文件
+
+## 十七、SIS 解包工具链（自研，已验证）
+- 工具：GitHub zixing131/sisinfo（Python 库）+ 自研 extract_sis2.py
+- 两处 py2 兼容补丁（unichr/ord-int），配对算法 = 按 SISFileDescription 的
+  uncompressedLength 与数据单元解压长度精确匹配（op=8 为空操作不装）
+- 战果：4 个 S60v3 模拟器 sis 全部 10/10、14/14、8/8、5/10 提取成功，
+  sys/bin/*.exe 均为 E32Image（magic 'z\x00\x00\x10'）：
+  picodrive.exe 485KB、gpfce.exe 339KB、AntSnes.exe + AntOpenGLES.dll(GLES!)、
+  fMSX 全套含 MS2EXT.ROM/DEFAULT.FNT
+- 工具留存 research/sistools/{sisinfo-master,extract_sis2.py}，可复用于任意 sis
+
+## 十八、S60 开源项目收藏（Copilot 清单 + 实测分支）
+正在下载 research/s60-repos/（gh-proxy 并行）：
+- PSP-Archive/PicoDrive-notaz(main, 1.5MB) —— S60 移植构建文件所在地
+- cowboyh4t/JTube —— 真 S60 Java(MIDlet) 应用
+- Hexadecinull/QRScan(main) —— symbian/ 目录 = S60 3rd ECam+ZXing
+- Klozz/Symbian-Open-Source —— 塞班生态资源汇总
+- wayfinder/Wayfinder-CppCore-v2(12MB) —— 大型真实 S60 C++ 应用（含 S60 头文件用法）
+- yomcube/ClassiCube(38MB) —— 含 Symbian S60 编译章节
+- libwbxml/libwbxml —— 含 Nokia S60 SDK 构建流程
+### Symbian SDK 考据（Copilot 调研归档）
+- SDK 本体不在 GitHub；版本对应表：S60 3.1=Symbian 9.2, 3.2=9.3, 5.0=9.4,
+  5.3=S^3, 5.5=Anna/Belle
+- Qt for Symbian 关键路径：EPOCROOT/epoc32/{include,release/armv5,release/winscw,tools}
+- Qt SDK for Symbian 4.7.3（Symbian^1）路径范式：C:/QtSDK/Symbian/SDKs/Symbian1Qt473/epoc32
+- NIKINIKI docs/archive/wiliwiliforsymbian3 = 现代可用的完整构建/签名/CODA 调试文档
+
+## 十五、前端选型决议 + 硬件加速真相（2026-10-12 定案）
+- 用户拍板：SDL 是正桥，GTK 古董不碰；Qt 仅在贡献 NIKINIKI 时学；
+  候补 = ImGui 风格 immediate-mode 手绘 / TUI 保底
+- 播放器形态：VGM 解码模块 + SDL 界面 + pulse 出声 + 键盘快捷键；
+  furnace tracker 移植 = 自找罪受，放弃
+- N900 加速家底（实测）：SGX530 全套在位（GLES1.1/2.0+EGL+libSDL_gles+Clutter eglx）
+- 加速表：SDL1.2 普通✗ | SDL_gles ✓ | Clutter ✓ | Qt4 半残 | C 直写 EGL 完全体
+- pygame 卡顿 = 画图开销(大头,GPU根治) + 解释开销(小头,GPU管不着)；
+  pygame 无 GLES 后端 → Python 只治一半；根治 = C+GLES1.1 固定管线重写渲染。
+  决议：skyraid C 版直接 GLES，跳过 SDL 软绘
+
+## 十六、塞班分世代图形路线
+- S^3/Anna/Belle：Qt4.7+/QML（NIKINIKI 模式），GPU=BCM2727（GLES+OpenVG）
+- S60v5：多数无 3D GPU（5800/N97），正解 = Avkon C++/Open C/J2ME；Qt4.6 可装
+- S60v3：N95/N82 有 PowerVR MBX(GLES1.1)，中低端无；J2ME 是 v3 游戏王者
+- 统一战线：C/SDL 核心一份 → N900 直编 + 塞班 SDL_Symbian + Leste N9，三平台薄壳
+
+## 十七、安卓双系统为何比 Maemo 流畅（架构代差，非优化强）
+- SurfaceFlinger+SGX 硬件合成 vs GTK+X11 纯 CPU 软绘（每帧十倍像素工作量差）
+- 触摸原生事件 vs X11+GTK 桌面 legacy；激进 LMK vs 万物常驻摊薄 235MB
+- SDL 路线 = 绕开桌面遗产，最接近"安卓式"的 Maemo 开发
+
+## 十八、PyS60 能力全谱（塞班 agent 的 API 底牌）
+- 系统：完整文件系统直达 C:/E:、set_home_time、sysinfo；
+  官方发过 high_capas 高权限变体 → "Python 清扫系统"坐实
+- 通信：inbox/messaging/telephone/logs/contacts/calendar
+- 硬件：camera/sensor 加速度/location 基站/positioning GPS/topwindow 悬浮/
+  keycapture 全局键/profile/audio 录音
+- 网络：socket/ssl/蓝牙 RFCOMM/红外/e32db
+- 上限：GUI=Canvas 手绘；游戏 2D 软绘 10-15fps；VGM 实时合成不可能
+  （无裸 PCM 输出+FM 算不动）→ 塞班只能放预转音频
+
+## 十九、SIS 解包工具链（自研已验证）
+- zixing131/sisinfo（Python 库）+ 自研 extract_sis2.py；两处 py2 兼容补丁
+- 配对算法 = FileDescription.uncompressedLength 与数据单元解压长度精确匹配
+  （op=8 空操作不装；extract_sis.py 初版按序配对会错位，弃用）
+- 战果：4 个 S60v3 模拟器 sis 全部完整提取，sys/bin/*.exe 均 E32Image：
+  picodrive.exe 485KB / gpfce.exe 339KB / AntSnes.exe+AntOpenGLES.dll(GLES) /
+  fMSX 含 MS2EXT.ROM。工具在 research/sistools/，可复用任意 sis
+
+## 二十、S60 开源仓库收藏（7/7 到手，research/s60-repos/）
+- PicoDrive-notaz(main,7.6MB)：platform/s60 = 塞班版构建文件
+- JTube(592KB)：真 S60 Java MIDlet 应用
+- QRScan(655KB)：symbian/ = S60 3rd ECam+ZXing
+- Symbian-Open-Source(2.5MB)：塞班生态资源汇总
+- Wayfinder-CppCore-v2(46MB)：大型真实 S60 C++ 应用，含全套 S60 头文件用法
+- ClassiCube(19MB)：src/Window_Symbian.cpp 等塞班后端
+- libwbxml(2.3MB)：symbian/ = Nokia S60 SDK 构建流程
+### Symbian SDK 考据（Copilot 调研归档）
+- SDK 本体不在 GitHub；版本表：S60 3.1=Symbian 9.2、3.2=9.3、5.0=9.4、5.3=S^3、5.5=Anna/Belle
+- Qt for Symbian 路径范式：EPOCROOT/epoc32/{include,release/armv5,release/winscw,tools}
+- Qt SDK 4.7.3 范式：C:/QtSDK/Symbian/SDKs/Symbian1Qt473/epoc32
+- NIKINIKI docs/archive/wiliwiliforsymbian3 = 现代可用的完整构建/签名/CODA 调试文档
