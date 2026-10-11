@@ -237,3 +237,20 @@
   deadbeef-0.4.2/），与 deb 内二进制严格同版本：plugins/gme（VGM/NSF/SPC 解码，
   我们最直接的参考）、plugins/pulse（PCM 输出）、plugins/adplug+vtx+sid（芯片音乐）、
   deadbeef.h（插件 API）。petteri 的 hildon 适配差异可日后用 deb 内 .so 逆向比对。
+
+## 十二、Maemo 5 正经开发栈（参考清单，2026-10-12 归档）
+来自 Copilot 调研 + 本项目实测双重印证。做"正经 Maemo 应用"就是这套组合：
+- UI：Hildon（libhildon，Maemo 原生 UI，建于 GTK+ 2 之上）+ GTK+ 2.x
+- 系统集成：libosso（应用生命周期/系统服务）、D-Bus + dbus-glib（IPC/通知）
+- 多媒体：GStreamer 0.10、ALSA/PulseAudio；图形加速：OpenGL ES/EGL（SGX530）
+- 电话/网络：oFono、Telepathy、NetworkManager/connman
+- 语言路线：入门 python-gtk2/python-hildon/python-osso → 深入 C+GTK+Hildon+libosso
+  → C++/Qt4（maemo-qt4）
+- 工具链：Maemo Fremantle SDK + Scratchbox2（交叉编译）、sbrsh/qemu 仿真、
+  dpkg-buildpackage 打 .deb、gdbserver 交叉调试
+- 代表性开源应用（学习素材）：MicroB（Mozilla Fennec 移植浏览器，最复杂范例，
+  wiki.maemo.org/MicroB、hg.mozilla.org/projects/maemo）、GPodder、Maemo Mapper
+- Copilot 推荐的"最强单件"是 MicroB；但按我们的目标（音频/播放器），
+  DeaDBeeF N900 移植是更贴身的范本（见第十一节）
+- 本仓库已有对应实证：skyraid 验证了 Python+SDL 快速迭代路线；
+  deadbeef 解包验证了 C+GTK2/Hildon+pulse 的正经路线；二者拼出完整地图
