@@ -556,3 +556,13 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   MidiInterface；发现 JL-Mod fork(woesss, 318★) 待后续对比媒体实现
 - **双世界策略定稿**：真机=三档降级流式；加载器=离线渲染+available()空子。
   同一 PSG 核，配置开关切换投放方式
+
+### 廿二再补充4：伪装在线流判决（J2ME Loader Manager.java 源码）
+- createPlayer(locator) 分支表只有 midi/tone/file/capture://audio|image|video；
+  **http:// 落入 BasePlayer() 静默空操作**——媒体层无 http 协议实现
+  （org.microemu.cldc.http.Connection 只服务 MIDlet 自己的 GCF 网络调用）
+- 服务器半边：ServerSocketConnection 有完整实现（MicroEmulator 系，
+  包真 java.net.ServerSocket），Android 不限 loopback——服务器立得起来，
+  甚至可反向利用：MIDlet 当服务器让 PC 浏览器遥控
+- 结论：加载器世界=离线渲染唯一解；伪装在线流仅 S60 真机可行
+  （MMAPI 原生 http locator，酷狗实证；代价=签名+权限+代理三笔税）
