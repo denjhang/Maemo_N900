@@ -171,3 +171,10 @@
 - assets/              启动器图标（48/124px）
 - shots/               截图缓存（gitignore，不入库）
 - PROGRESS.md          本笔记：设备档案 + 全部方案与踩坑
+
+## 七、GitHub 建仓/Push 流程（本机实测）
+- 建仓：从 Git 凭据管理器取 token（`git credential fill`）→
+  `POST https://api.github.com/user/repos`，无需 gh CLI
+- push：直连被重置、7890 不通，**必须走 `http.proxy=http://127.0.0.1:7892`**
+  （github-accel 技能记载的 push 专线）
+- 远程：https://github.com/denjhang/Maemo_N900 (main)
