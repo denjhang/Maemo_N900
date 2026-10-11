@@ -539,3 +539,7 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 - 附：FreeJ2ME 模拟了 Nokia Sound/Samsung AudioClip/Vodafone SoundPlayer 等
   厂商私有 API，MIDI 作弊路径也兼容；真 PCM x-wav 通道反而是最干净的路线
 - 双世界策略：同一 PSG 核，真机走实时流，加载器走离线渲染，配置项切换
+- API 依赖定案（JSR-172 页面查证后）：PSG 服务器只用 **MIDP2.0 核心 GCF**
+  （ServerSocketConnection/HttpConnection，2002 年起 mandatory，全系必带）
+  + MMAPI(JSR-135)。不依赖任何可选包（JSR-172/234 之类机型随机发货的
+  一律不碰）——FPlay 用 JSR-234 EQ 都得写降级探测，我们零可选包零探测
