@@ -232,3 +232,8 @@
   ——我们的 VGM 播放器可先装它听为快，自研播放器则学它的
   "核心+插件"分层（解码器独立于输出与 UI，正是精简内核路线要的形态）
 - 安装位置 /opt/deadbeef，rootfs 无需变动，附 deadbeef.desktop
+- 源码补充：petteri 的 maemo 分支已在 GitHub 失传（链接 404、Wayback 无存档）。
+  已改取官方 DeaDBeeF-Player/deadbeef 的 **0.4.2 标签源码**（research/deadbeef-n900/
+  deadbeef-0.4.2/），与 deb 内二进制严格同版本：plugins/gme（VGM/NSF/SPC 解码，
+  我们最直接的参考）、plugins/pulse（PCM 输出）、plugins/adplug+vtx+sid（芯片音乐）、
+  deadbeef.h（插件 API）。petteri 的 hildon 适配差异可日后用 deb 内 .so 逆向比对。
