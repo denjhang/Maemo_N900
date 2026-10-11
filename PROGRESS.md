@@ -254,3 +254,21 @@
   DeaDBeeF N900 移植是更贴身的范本（见第十一节）
 - 本仓库已有对应实证：skyraid 验证了 Python+SDL 快速迭代路线；
   deadbeef 解包验证了 C+GTK2/Hildon+pulse 的正经路线；二者拼出完整地图
+
+## 十三、Maemo 软件源存活地图（2026-10-12 并行探针实测）
+**活的（金矿）：**
+- plan9.de SDK 源 ✅✅✅ 最高价值：
+  https://maemo.plan9.de/apt-mirror/mirror/repository.maemo.org/
+  dists/fremantle/{sdk,tools}/free/non-free 全部有 Packages.gz（armel，
+  sdk/free 索引 283KB 实测 200）——**官方 SDK 仓库复活了**，交叉编译要的
+  libhildon-dev/libosso-dev 等头文件库全在这
+- cloud-7.de ✅ https://maemo.cloud-7.de/maemo5/
+  离线安装包仓库（opt/usr/sbin/patches_n_tools/HAM-catalogs），
+  含 muarf_all.install 等目录配置器
+- merlin1991.at ✅ 仅 CSSU（community-thumb/devel）
+**死的：** repository.maemo.org 全线、downloads.maemo.nokia.com、
+merlin /extras 路径、maemo.muarf.org（直连 000/代理 502，仅存于
+cloud-7 的 catalog 配置文件里）、viniciuspaes（403 全站）、
+coderus.openrepos.net（301 转 https 后未验）
+**注意**：plan9 是 https，设备上 busybox wget 不一定能用；
+正确姿势 = PC 端下 deb → 推到设备 dpkg -i（见第七节源策略）
