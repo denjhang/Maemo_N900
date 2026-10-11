@@ -475,3 +475,23 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 - mmp 链接姿势：LIBRARY mediaclientaudiostream.LIB + 静态库 cyclone.o 等
 **勘误**：原表"S60v3 FM 实时可保"成立，但注明"声音完整=8-22kHz 降采样+可跳帧"，
 非 44.1kHz 满配。
+
+## 廿二、引擎血统：STC_Chiptune（VGM 挑战的底气，2026-10-12 收录）
+- 位置：E:\working\vscode-projects\STC_Chiptune（Denjhang 架构+硬件 × Claude 固件）
+- **STC32G12K128：C251 核 38MHz IRC，4KB SRAM+8KB XRAM**，六音源共享
+  17640Hz ISR（每中断预算 56.7µs，Keil OPTIMIZE(8,SPEED) 压线达标）：
+  AY8910 / SN76489 / 自定义2-Op FM(16voice) / YM2413 OPLL(VGM寄存器级兼容,
+  9ch+rhythm) / Gigatron TTL / WT 波表 / ADPCM / BRR(SNES SPC DSP bit-exact)
+- 8-bit PWM=权衡后的最优解（10-bit 载波 37kHz 落入可听段出底噪，38MHz IRC
+  锁不住 PLL）；新板 STC32G144K246 实跑 **72MHz HPLL**（代码实锤
+  usb_cdc_test/src/main.c MAIN_Fosc=72000000L，HPLLPDIV=5）——超频立项，
+  配 I2S+TLV320AIC23B codec+纯源码 USB CDC
+- **正视差距**：超频到 72MHz 的 C251 也够不着最便宜的 S40（200-460MHz ARM9+cache）。
+  MCU 项目=极限工程（每微秒每字节预算内采购），手机=生态工程（瓶颈在架构不在硅）
+- **VGM 主线已通**：tools/vgm_player.py PC 端解析 VGM 命令流走 UART 喂芯片
+  实时合成（AY8910/SN76489/OPLL 曲目库在 vgm/），VGM_COMMAND_TABLE_libvgm.md 命令表齐备
+- **对 N900 引擎的定论**：精简内核不用学别人——ay8910.c/sn76489.c/fm.c 就是
+  蓝本。移植到 600MHz A8+256MB 后约束全部松绑十倍以上：44.1kHz 立体声、
+  加 YM2612(MAME整数核,deadbeef 参考)二引擎、混响等全部解锁
+- 血统谱系：74 门电路 PSG/WSG → C251 全速 YM2413 → STC32G 六核博物馆 →
+  N900 VGM 引擎（架构同源，镣铐逐代放宽）
