@@ -217,3 +217,18 @@
   s/1oiuhDUrveNeCDzK9gdAhag、s/1tojpORlo6SLbZI221beNpQ，需手动转存）
 - 但引擎本体已不依赖网盘：research/pymo-master 内含 symbian/app.py 源码 +
   PyS60 2.0.0 全套官方 sis（见第八节）
+
+## 十一、DeaDBeeF for N900 —— 正经播放器的参考答案（2026-10-12）
+- 来源：https://23.fi/deadbeef-n900/（petteri 的移植页），
+  deadbeef_0.4.2-2_armel.deb 已下载解包（research/deadbeef-n900/）
+- 源码：github.com/petteri/DeaDBeef（待克隆）；deb 内含 deadbeef.h 插件 API 头文件
+- **架构范本**：核心 + 动态插件（.so），解码器/输出/UI 全是插件：
+  - 解码插件：ffmpeg、flac、vorbis、mpgmad、musepack、sndfile、tta、shn、
+    ffap(猴子猴)、dumb/mod、**adplug(OPL 芯片)**、**sid**、**vtx(AY/YM 芯片)**、
+    **gme(游戏音乐全家桶：VGM/NSF/SPC...)**、wildmidi
+  - 输出插件：**pulse**(N900 原生)、ao；UI：gtkui；另附 supereq 均衡器、
+    artwork 封面、lastfm、vfs_curl 网络流、hotkeys、shellexec
+- **重磅**：gme 插件意味着装上这个 deb 的 N900 理论上已能直接播 VGM/NSF/SPC
+  ——我们的 VGM 播放器可先装它听为快，自研播放器则学它的
+  "核心+插件"分层（解码器独立于输出与 UI，正是精简内核路线要的形态）
+- 安装位置 /opt/deadbeef，rootfs 无需变动，附 deadbeef.desktop

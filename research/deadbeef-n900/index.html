@@ -1,0 +1,88 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<html> <head>
+<style type="text/css">
+img 
+{
+float:right;
+}
+</style>
+<title>DeaDBeeF for Nokia N900</title>
+</head>
+
+<body>
+<h1>DeaDBeeF for Nokia N900</h1>
+
+<p>This is an unofficial port of <a
+href="http://deadbeef.sourceforge.net/">DeaDBeeF</a> music player for
+Nokia N900 mobile phone.</p>
+
+<img src="http://23.fi/kuvat/deadbeef-n900.png" alt="deadbeef" /> 
+
+<p>All information here is provided as a courtesy and intended for
+reference use only. Using it is at own risk; no warranty of any kind
+is expressed or implied. The author of this page cannot be held liable
+for any damage caused by following the advice given, using the links
+provided or using the software mentioned on this page.</p>
+
+<h2>Installing</h2>
+
+<p>This is work in progress. When the port is more mature, I will
+ upload debian packages to maemo.org, but for now the packages can be
+ found here.</p>
+
+<p>First you need to install Libsamplerate and libmad. The can be
+downloaded from maemo.org, here: <a
+href="http://maemo.org/packages/view/libsamplerate0/">http://maemo.org/packages/view/libsamplerate0/</a>,
+and <a
+href="http://maemo.org/packages/view/libmad0/">http://maemo.org/packages/view/libmad0/</a>.
+
+<p>Then you need debian package for DeadBeef. You can find it <a
+href="http://23.fi/deadbeef-n900/deadbeef_0.4.2-2_armel.deb">here</a>. Install
+the debian package with dpkg.</p>
+
+
+<p>Now you can start DeaDBeeF from menu or from commandline with
+run-standalone.sh /opt/deadbeef/bin/deadbeef.</p>
+
+<h2>N900 version differences</h2>
+<p>Features:
+<ul>
+  <li>Autorotation</li>
+  <li>Hildon menu to toggle off default GTK menu</li>
+</ul>
+</p>
+
+<p>Known problems:
+<ul>
+  <li>When first time starting volume from DeaDBeeF might be on zero. Check it</li>
+  <li>GTK filedialog does not see all directories(?), luckily it supports typing the filepath</li>
+  <li>Do not select anything from Help menu, it will open non closable
+  window (kill DeaDBeeF from xterm, if you accidentally do this)</li>
+  <li>Lastfm plugins passwords first letter is typed in as capital. You
+  might want to edit it manually from ~/.config/deadbeef/config
+  file</li>
+</ul>
+</p>
+
+
+<h2>Updates</h2>
+<pre>
+Sun Oct 24 17:15:04 2010 +0300 - Added libmad0 dependency (deadbeef_0.4.2-2_armel.deb)
+Sat Oct 23 14:31:28 2010 +0300 - Provided debian package and compiled in ogg support (deadbeef_0.4.2-1_armel.deb)
+Fri Oct 22 22:53:42 2010 +0300 - Maemo: Fixed DeaDBeef shutting down after 90 secs when started from menu
+</pre>
+
+<h2>Source</h2> <p>Modifications to the official source can be found
+on my github page, <a href="http://github/petteri/DeaDBeef">here</a></p>
+
+<h2>Compiling</h2> <p>DeaDBeeF can be compiled easily in
+scratchbox development environment. Just clone my branch, run
+autogen.sh, configure, make and make install. My configure args are
+these: </p>
+
+<pre>./configure --prefix=/opt/deadbeef --enable-maemo --disable-oss --disable-alsa --disable-nullout</pre>
+
+<hr>
+<address>petteri gmail com </address>
+<!-- hhmts start --> Last modified: Sun Oct 24 17:19:23 EEST 2010 <!-- hhmts end -->
+</body> </html>
