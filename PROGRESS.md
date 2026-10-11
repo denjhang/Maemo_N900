@@ -543,3 +543,16 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   （ServerSocketConnection/HttpConnection，2002 年起 mandatory，全系必带）
   + MMAPI(JSR-135)。不依赖任何可选包（JSR-172/234 之类机型随机发货的
   一律不碰）——FPlay 用 JSR-234 EQ 都得写降级探测，我们零可选包零探测
+
+### 廿二再补充3：J2ME Loader 判决 + 空子（源码级，nikita36078/J2ME-Loader）
+已收至 research/j2meloader/（2688★ 官方仓）
+- **实时流式必死**：createPlayer(InputStream) 同步把流灌进临时文件到 EOF
+  才返回（InternalDataSource 构造函数 while 循环）——无限流=永久阻塞
+- **空子**：`stream.available()` 用于预分配临时文件长度（raf.setLength）。
+  PSG=确定性合成，总字节数精确已知 → available() 报真实总长，
+  高速合成灌满（1s渲3min曲）→ MediaPlayer 播临时文件，体验无感
+- audio/x-wav 在 supportedTypes 白名单；自带 ffmpeg（ADPCM→PCM u8@16k 自动转换）
+- 其他部件：ToneManager(playTone 原生)、MMFConverter(SMAF)、RecordPlayer、
+  MidiInterface；发现 JL-Mod fork(woesss, 318★) 待后续对比媒体实现
+- **双世界策略定稿**：真机=三档降级流式；加载器=离线渲染+available()空子。
+  同一 PSG 核，配置开关切换投放方式
