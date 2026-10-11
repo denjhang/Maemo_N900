@@ -518,3 +518,24 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   探测照抄它的候选表思路
 - MeBoy-Asha 源码实证 = MIDI 作弊（MIDI_DEVICE_LOCATOR+shortMidiEvent），
   反面教材，与我们无关；GitHub 无 J2ME 真软件合成先例 → 我们写即参考实现
+
+### 廿二再补充：FPlay J2ME（carlosrafaelgn）——J2ME 播放器工程完整体
+- 已收至 research/fplay/（86 个 java 文件，目标机型 Nokia 3120c 弱 S40，MIT）
+- 播放=URL locator 三件套：file:///（本地）、**capture://radio?f=...M（把手机
+  FM 调谐器硬件包成 Player 源，白嫖收音机功能）**、getEncodedURL（转义）
+- EQ=JSR-234 amms EqualizerControl 全局控制+能力探测降级；
+  可视化=getMediaTime 轮询；触屏+键盘双输入完整 UI
+- J2ME 输出路线图齐了：FPlay 的 URL 壳+JSR-234 EQ + MIDPlay 的
+  InputStream 流式骨架 + 我们的 PSG 核（伪 WAV 流/文件轮换降级矩阵）
+
+### 廿二再补充2：加载器世界判决（FreeJ2ME 源码实锤）
+- 证据：flashgame/j2me_ref/freej2me-web-main LibmediaPlayer.doPrefetch() =
+  `MediaBridge.playerLoad(handle, readBytesAndClose(stream), type)`
+  —— **InputStream 被一次性全读，无流式**（j2me-web 同源码）
+- 因此伪 WAV 无限流方案在 FreeJ2ME/J2ME Loader 上死路；真机三档矩阵照旧
+- **加载器模式**：PSG 离线渲染完整 WAV（3min@22050 单声道≈8MB，安卓堆无压力，
+  渲染 1s 音频≈0.1-0.3s CPU）→ createPlayer(ByteArrayInputStream,"audio/x-wav")
+  —— 1 秒内渲完全曲，体验=加载曲子
+- 附：FreeJ2ME 模拟了 Nokia Sound/Samsung AudioClip/Vodafone SoundPlayer 等
+  厂商私有 API，MIDI 作弊路径也兼容；真 PCM x-wav 通道反而是最干净的路线
+- 双世界策略：同一 PSG 核，真机走实时流，加载器走离线渲染，配置项切换
