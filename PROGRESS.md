@@ -455,3 +455,23 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 2. 引擎与 UI 分离：核心输出 PCM 环形缓冲，前端可以是 SDL/QML/Avkon/Canvas
 3. 移植顺序：N900 → S^3(同为C++) → v5/v3(OpenC) → J2ME 版(PSG实时+FM预转)
 4. 各平台音频共性：全部要 16bit 小端 PCM 环形缓冲 + 独立解码线程/定时器
+
+### 廿一节勘误与源码实证（读 PicoDrive-notaz platform/s60 + uiq3 之后）
+**"E72 全速完整声音"的源码级解释（PicoDrive S60V3）：**
+- CPU核 = **Cyclone**（手写 ARM 68000 dynarec）+ **DrZ80**（手写 ARM Z80），
+  以预编译 .o 链接（cyclone.o/DRZ80.o/ym2612_helper.o 直接进 mmp）
+- YM2612/SN76489 核心来自 MAME（整数实现，非高精度核）
+- 声音配置（install.txt 原文）：YM2612+SN76489 默认全开，
+  **采样率 8/11/16/22kHz 四档，默认 8kHz**（不是 44.1k！），自动跳帧
+- 所以"全速完整声音"= FM+PSG 全开 @ 8-22kHz + 跳帧，这正是
+  "精简整数核+降采样"路线的实战背书——我们的 VGM FM 策略与之一致
+
+**塞班音频输出参考实现（platform/uiq3/engine/audio_mediaserver.cpp，293行）：**
+- 输出 API = CMdaAudioOutputStream（MEDIACLIENTAUDIOSTREAM.LIB），
+  TMdaAudioDataSettings 支持 8000/11025/16000/22050/44100Hz 五档
+- 双缓冲（iSoundBuffers）+ KMaxLag 欠载阈值 + 连续 underflow 计数保护（50次熔断）
+- 这 293 行就是塞班 VGM 播放器音频层的完整模板：我们只需
+  把它的喂料端从 Pico 的 mix 接到 VGM 核心即可
+- mmp 链接姿势：LIBRARY mediaclientaudiostream.LIB + 静态库 cyclone.o 等
+**勘误**：原表"S60v3 FM 实时可保"成立，但注明"声音完整=8-22kHz 降采样+可跳帧"，
+非 44.1kHz 满配。
