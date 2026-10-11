@@ -272,3 +272,14 @@ cloud-7 的 catalog 配置文件里）、viniciuspaes（403 全站）、
 coderus.openrepos.net（301 转 https 后未验）
 **注意**：plan9 是 https，设备上 busybox wget 不一定能用；
 正确姿势 = PC 端下 deb → 推到设备 dpkg -i（见第七节源策略）
+
+## 十四、S60v3 模拟器"性能天花板"样本（2026-10-12 收藏）
+inbox/s60v3-emulators/ 四件套（E72 等 v3 机型实测可跑）：
+- picodrive 1.51 s60v3 —— MD 模拟器，Cyclone 68000 手写 ARM dynarec，
+  220MHz N73 全速跑 MD，"效率优化牛逼"的教科书本体
+- fMSX 3.5 s60e3 —— MSX 模拟器（配 inbox/msx-aleste 的 Aleste 2 ROM）
+- gpfce 0.3.3 —— NES 模拟器
+- AntSnes 0.6.3 —— Summeli 的 SNES（与 research/Summeli/AntSnes 源码对应）
+学习点：这些在无 GPU、220-434MHz v3 机器上全速的移植，核心技巧=
+手写 ARM 动态重编译 + 定点数 + 精简显存路径。对 N900 上的
+C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数实现）同理。
