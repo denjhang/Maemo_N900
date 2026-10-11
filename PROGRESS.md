@@ -507,3 +507,14 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   72MHz 超频的 144K246 现在是 USB 声卡形态的八芯片合成器
 - 结论强化：N900 引擎的合成核 = 直接沿用这套"查表融乘"范式；
   STC 版核心可移植性=纯 C，几乎免改造
+
+### 廿二补充：J2ME 参考项目落实（MIDPlay）
+- **MIDPlay**（phd051199, ★80, J2ME 在线音乐播放器）已收至 research/midplay/
+- 关键实证：`Manager.createPlayer(InputStream, contentType)` 流式播放范式，
+  生产级细节全有：content-type 候选协商、创建重试+瞬态失败标记、
+  分片创建防卡死、自定义 BufferedInputStream、URL/InputStream 双模式
+- **J2ME PSG 播放器 = STC 计数器范式 PSG 核 + MIDPlay MediaResolver 骨架**：
+  contentType 换 audio/x-wav，喂料换 PSG render()；content-type 协商降级
+  探测照抄它的候选表思路
+- MeBoy-Asha 源码实证 = MIDI 作弊（MIDI_DEVICE_LOCATOR+shortMidiEvent），
+  反面教材，与我们无关；GitHub 无 J2ME 真软件合成先例 → 我们写即参考实现
