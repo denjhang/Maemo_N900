@@ -208,3 +208,12 @@
   把所有的歌献给未来的你，移植者：黑之契约者/墨水管等，百度盘存档）
 - 启示：N900 的 python2.5 + pygame 比 PyS60 的 appuifw 快一个量级以上，
   PYMO PC 版（pygame）理论上稍加移植即可在 N900 跑 120日元——待验证
+
+## 十、pymogames.com 官网镜像（2026-10-12）
+- 已整站镜像至 research/pymogames.com/（173 文件/40MB，链接已本地化，离线可开）
+- 内容：首页游戏图鉴（120日元/3days/Ever17 等截图齐全）、install.html 安装指南、
+  changelog（引擎版本史）、FAQ、**《PYMO教程》PDF 2.5MB**（中文，含脚本命令文档）
+- 站内无直接 sis/zip 包：引擎与游戏分发全走百度网盘（官网留有两处 pan 链接：
+  s/1oiuhDUrveNeCDzK9gdAhag、s/1tojpORlo6SLbZI221beNpQ，需手动转存）
+- 但引擎本体已不依赖网盘：research/pymo-master 内含 symbian/app.py 源码 +
+  PyS60 2.0.0 全套官方 sis（见第八节）

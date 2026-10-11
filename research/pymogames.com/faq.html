@@ -1,0 +1,64 @@
+﻿<!doctype html>
+<html>
+<head>
+<title>pymo-常见问题解答</title>
+<link href="stylesheets/format.css" rel="stylesheet" type="text/css" />
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta name="viewport" content="width=540, initial-scale=0.59, user-scalable=yes"/>
+</head>
+<body>
+<div class="box" style="text-align:center">
+<h2>pymo常见问题解答</h2>
+</div>
+<div class="box">
+<h2><a href="index_real.html" > << 返回首页</a></h2>
+<h3>Android版</h3>
+<p>
+1. 游戏可以随便放在内置存储或外置SD存储的任意文件夹里<br>
+2. 存档放在内置存储上的Android/data/com.pymo.pymo/files/save里（注意：删除pymo应用后，此文件夹也会被删除，请提前做好存档等的备份。）<br>
+</p>
+
+<h3>Symbian版</h3>
+<p>
+一、安装了以后程序打不开、点击pymo没反应？<br>
+应该是Python平台没有安装好，可以在装好python平台之后，安装压缩包内的python前端界面（PythonScriptShell_2.0.0_3_0.sis）试一试，看看这个前端界面能不能运行，如果不能的话就是python没有安装好。解决方案：<br>
+1、之前装过低版本的Python平台的一定要完全删除其本体及所有组件之后再安装新版（包括所谓的Super Python 2.5版什么的，那些都不是官方版本，官方只出到2.0版）<br>
+2、python平台和pymo一定要装在同一盘符下<br>
+3、如果都装在C盘下不行，可以尝试都装在E盘<br>
+<br>
+二、打开pymo提示"找不到游戏"?<br>
+说明Python平台装好了，但是没有把游戏资源放在存储卡正确的路径上。正确的方法应该是把Python文件夹放到存储卡的根目录下。看上去应该是这样 E://Python//游戏目录...<br>
+<br>
+三、运行pymo后，可以玩了，但运行一段时间之后跳出?<br>
+1、可能是游戏资源没有解压好，不要用手机解压资源。<br>
+2、可能是运行内存不足，请确保空闲的运存至少有12M，可以尝试关闭游戏设置中的“资源预取功能”看情况是否有改善。<br>
+<br>
+四、关于多个游戏并存的问题，安装1个以上的游戏，拷游戏资源的时候提示Python文件夹覆盖，会不会破坏已经安装的那个游戏？<br>
+覆盖无妨，如果看一下资源的文件夹结构就知道，Python文件夹下面的资源是放在单独的文件夹里，不会相互影响。<br>
+<br>
+五、存储卡空间压力很大，能不能删除语音包？<br>
+可以，要删除语音节省空间的话，删除voice/voice.pak文件就可以，不会影响游戏运行。<br>
+<br>
+六、塞班手机显示文字全是方框或者没有文字？<br>
+pymo没有找到正确的字体，手动在游戏设置里面设一下字体就可以。如果是v3机器，进入游戏后按左软键弹出菜单，选择Configure-&gt;字体，里面就那几种字体，一个一个试吧。<br>
+如果是v5或者塞班三的机器，要选开始游戏，出现对话以后，再按菜单键才会弹出菜单。在弹出的菜单里选择第四项就是游戏设置了。<br>
+<br>
+七、成功运行了程序，出现了画面，但是在游戏中途报错跳出？<br>
+十有八九是你存储卡上的资源文件损坏造成的。罪魁祸首有二，一、使用手机解压资源，二、使用了质量不好的数据线或读卡器。<br>
+解决方案：老老实实在电脑上解压吧。<br>
+<br>
+八、存档文件在哪？<br>
+存档文件在 save/ 里面，其中以数字命名的就是各个存档，还有一个global.sav存储着通关记录和CG解锁记录，如果要分享全CG存档的话拷贝这个文件就可以。<br>
+<br>
+九、索爱用户，pips.sis装不了？<br>
+可以试一试这个<a href=http://pan.baidu.com/s/1eRgXPPw>索爱可用的pips组件</a><br>
+<br>
+十、如何自动快进？<br>
+v3机器可以按下1键不放，按左软键弹出菜单，松开左软键，再松开1键。<br>
+v5和^3机器可以按住“快进”然后手指滑到旁边的“自动”再放开。<br>
+<br>
+</p>
+</div>
+
+</body>
+</html>
