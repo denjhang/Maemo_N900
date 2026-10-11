@@ -1,5 +1,0 @@
-ReadyToRunListenerTest
-Nav2InitTest
-NetworkSetupTest
-MapLibInitTest
-Nav2ShutdownTest

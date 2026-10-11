@@ -1,9 +1,0 @@
-[submodule "lib/json"]
-	path = lib/json
-	url = https://github.com/shinovon/Java-JSON-Library.git
-[submodule "lib/midletintegration"]
-	path = lib/midletintegration
-	url = https://github.com/shinovon/MIDletIntegrationLibrary.git
-[submodule "lib/j2mekeyboard"]
-	path = lib/j2mekeyboard
-	url = https://github.com/shinovon/j2mekeyboard-library.git
