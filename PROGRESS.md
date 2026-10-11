@@ -578,3 +578,19 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   堆够的机器不配受链式的罪；Player 常驻复用，GC 压力最小化
 - 全谱系输出矩阵终版：真机流式(S60)/文件轮换(S40)/碎片链(S40v3 极端)；
   加载器离线渲染；MIDI 转换器(S40 实时备胎)；整曲单块(4MB+ 堆)
+
+### 廿二终章补：VGM→MIDI 实时转译器路线（材料全部到位）
+- 重大发现：**denjhang/vgm_ws_to_mid_full_version（用户本人旧作）**
+  ——WonderSwan VGM→MIDI 转换器 v1.6→v2.55 五版迭代（research/midi-converters/ws2mid/），
+  精确音高/时序、动态音量声像、颤音、无缝循环、instruments.ini 乐器系统；
+  靠逆向 libvgm/modizer 完成，中英双语文档齐全
+- jvgmtrans（dksrphm, Java VGM→MIDI，17★）：7 芯片映射类
+  （V2mPSG=SN76489 明注 / YM2612 / YM2151 / YM2203 / C140 / OKIM6295 / SegaPCM），
+  纯 Java 可移植；绑死桌面的只有 javax.sound.midi 输出层
+- 其他参考：vampirefrog/vgm2x（vgm2mid/vgm2opm）、JamesDunne/vgm2midi（higan 系）
+- **J2ME 实时转译器架构**：VGM 解析(现成) → 寄存器追踪(jvgmtrans 映射逻辑)
+  → MIDI 事件(ws2mid 的转换智慧) → MIDIControl.shortMidiEvent(MIDPlay 管道)
+  → 手机音源。零合成开销、1MB 堆无压力、S40v3 起全系实时
+- 保真度分层：YM2413→OPLL 直译最优 / SN76489 良好 / YM2612 已知弱项(天花板)
+- 三输出路线终局：PCM 合成(N900/S60 原汁) + MIDI 转译(S40 全系实时) +
+  离线渲染(加载器) —— 三条路同一份 VGM 解析器喂料
