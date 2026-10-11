@@ -414,3 +414,44 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 - Qt for Symbian 路径范式：EPOCROOT/epoc32/{include,release/armv5,release/winscw,tools}
 - Qt SDK 4.7.3 范式：C:/QtSDK/Symbian/SDKs/Symbian1Qt473/epoc32
 - NIKINIKI docs/archive/wiliwiliforsymbian3 = 现代可用的完整构建/签名/CODA 调试文档
+
+## 廿一、全平台 VGM 播放器可行性研究（2026-10-12 大调研）
+
+### 硬件/开发栈总表
+| 平台 | SoC/CPU | RAM | GPU | 语言 | 前端 | 音频API |
+|---|---|---|---|---|---|---|
+| N900 Maemo5 | OMAP3430 A8@600 | 256MB | SGX530 | C/C++, Py2.5 | GTK/Hildon, SDL, Qt4.6 | pulse/ALSA ✓裸PCM |
+| N9 MeeGo | OMAP3630 A8@1G | 1GB | SGX530 | C/C++, Qt4.7/QML | QML/SDL(社区) | pulse ✓ |
+| S^3(N8/701/808) | ARM11@680→1.3G | 256MB | BCM2727 | Symbian C++, Qt4.7/QML, J2ME, PyS60 | Qt/QML, Avkon | DevSound ✓裸PCM |
+| S60v5(5800/N97) | ARM11@434 | 70-128MB | 无 | Symbian C++, OpenC, J2ME, PyS60, Qt4.6 | Avkon | DevSound ✓ |
+| S60v3(N73/N95/E71) | ARM9@220-369 | 64-128MB | 仅N95等MBX | Symbian C++, OpenC(9.2+), J2ME, PyS60 1.4 | Avkon | DevSound ✓ |
+| S60v2(6600/N70) | ARM9@123-220 | 10-32MB | 无 | Symbian C++(无OpenC), J2ME, PyS60 1.x | Avkon前奏 | CMdaAudioOutputStream |
+| S60v1(7650/N-Gage) | ARM9@~123 | 4-8MB | 无 | Symbian C++(最原始), J2ME MIDP1 | 无框架 | 流式PCM(挤) |
+| S40v3/v5/v6(6300/5310) | ARM9@200-460 | Java堆1-5MB | 无 | **仅J2ME** | MIDP UI | MMAPI(wav/mp3流) |
+| Asha全触(305/311) | ARM11@1G | 128MB+ | 无 | 仅J2ME+Asha UI | Asha Full Touch | MMAPI ✓ |
+| Asha平台(501等) | 1G | 4GB存储 | 无 | 仅J2ME+Asha UI | Asha UI | MMAPI ✓ |
+
+### VGM 播放器落地判定（VGM=SN76489/YM2413/YM2612/YM2151/AY等）
+- **N900 ★★★★★**：C+Gens系FM核心+pulse，全芯片全实时。deadbeef+gme 已证明；
+  自研播放器是"顺便的事"。基线参考：我们手里 2023 vgmplay ARM 二进制
+- **N9 ★★★★★**：1GHz+1GB，最舒服；Qt/QML 前端+SDL 引擎，全芯片实时无压力
+- **S^3 ★★★★**：原生 C++ 引擎(整数FM核)+DevSound：YM2612 实时可保(参照Gens
+  在 133-233MHz 奔腾全速史)；Qt/QML 做界面；808(1.3G) 更宽裕
+- **S60v5 ★★★☆**：434MHz 跑 Gens 系整数 FM 核≈实时临界但可过(降采样32000Hz
+  保险)；PSG/YM2413 宽裕。J2ME 版=PSG 可、FM 不可(Java合成太慢) → J2ME 只做
+  预转播放器(把VGM离线转WAV再MMAPI播)
+- **S60v3 ★★★**：330MHz 级(FP1+ 9.2)同上策略；220MHz(N73) 只保 PSG+YM2413，
+  YM2612 建议预转。OpenC 让 C 引擎能编译(v3.2+)；v3.0/9.1 只能纯 Symbian C++
+- **S60v2 ★★**：123-220MHz+10-32MB：只做 PSG/YM2413 播放器(手写8bit合成核)，
+  FM 全预转。CMdaAudioOutputStream 16bit 流式可行
+- **S60v1 ★**: 123MHz+4MB：英雄模式 PSG 单芯片播放器；或干脆只做"VGM信息查看器"
+- **S40全系/Asha ★★**：**只能 J2ME**。结论分两档：
+  ① 实时 PSG 合成播放器(参照 vNes/MeBoy 在 S40 全速跑模拟器的实证，SN76489
+  的Java合成比NES整机模拟便宜一个量级，必然实时)
+  ② FM 类 = J2ME 写离线转换器(VGM→WAV)再 MMAPI 播放，"格式支持"保住，实时性放弃
+
+### 总路线图
+1. N900：主线，C+SDL/GLES 前端实验场（gme 基线 + 自研精简核心）
+2. 引擎与 UI 分离：核心输出 PCM 环形缓冲，前端可以是 SDL/QML/Avkon/Canvas
+3. 移植顺序：N900 → S^3(同为C++) → v5/v3(OpenC) → J2ME 版(PSG实时+FM预转)
+4. 各平台音频共性：全部要 16bit 小端 PCM 环形缓冲 + 独立解码线程/定时器
