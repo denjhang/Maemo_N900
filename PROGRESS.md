@@ -189,3 +189,22 @@
 - 相关：原生 C 路线的 ONScripter 官方移植覆盖 Win/Linux/Android/iOS/PSP 等
   （GPL，AUR 有 onscripter-en 包）；KiriKiri 系有 Kirikiroid 血统延续至安卓
 - 启示：N900（A8 + 真 Linux）跑 ONScripter 引擎同理没有障碍
+
+## 九、PYMO 引擎解包分析（源码级，2026-10-11）
+- 源码已落地 research/pymo-master（gh-proxy 加速下载 master.zip，36MB）
+- **引擎本体 = symbian/app.py 单文件 4968 行 Python 2**（PC 版 pc/main.py 5095 行 pygame）
+- 仓库 symbian/PythonForS60/ 里**直接捆着 PyS60 2.0.0 + ScriptShell 的官方 sis**
+  ——塞班端"引擎安装包"问题就此解决，免签名官方包
+- 依赖全是 PyS60 原生模块：appuifw/graphics/e32/audio，无任何第三方 C 扩展
+- 功能实况（远超预期）：逐字符文字渲染+字体颜色/速度可调、立绘+遮罩、
+  CG 鉴赏、存档槽、设置菜单、MP3 BGM/语音、WAV 音效、**视频播放**、
+  自定义 pak 资源包（u32 数量 + [GBK文件名32B + u32偏移 + u32长度] 条目，
+  与 120Y 的 bg.pak 实测头完全吻合）
+- 性能真相：纯解释执行跑在 300-434MHz ARM11 上，靠"静态背景+对话框节奏"
+  的 galgame 天然适配才流畅；文字是逐字符画+redraw，这是它吃 CPU 的地方
+- 游戏包实测（120日元，国人 chen_xin_ming 移植、GGM 论坛汉化）：
+  s60v3 版 320x240/字号16，s60v5 版 540x360/字号26——同引擎按平台出双资源包
+- 手头游戏资源：F:\下载\120日元（120日元全集）、F:\下载\pymo（eden/Ever17/
+  把所有的歌献给未来的你，移植者：黑之契约者/墨水管等，百度盘存档）
+- 启示：N900 的 python2.5 + pygame 比 PyS60 的 appuifw 快一个量级以上，
+  PYMO PC 版（pygame）理论上稍加移植即可在 N900 跑 120日元——待验证
