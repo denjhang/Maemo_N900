@@ -594,3 +594,18 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 - 保真度分层：YM2413→OPLL 直译最优 / SN76489 良好 / YM2612 已知弱项(天花板)
 - 三输出路线终局：PCM 合成(N900/S60 原汁) + MIDI 转译(S40 全系实时) +
   离线渲染(加载器) —— 三条路同一份 VGM 解析器喂料
+
+## 廿三、里程碑：2023 年的 vgmplay 真机跑通（2026-10-12 深夜达成）🎉
+- 链路：2023 vgmplay ARM 二进制 + **自研 mini libao.so.2（150 行直连 ALSA）**
+  + 设备 ALSA default→pulse 桥（/etc/asound.conf 原生支持）
+- 实测：《Tim 7: Ronda Alla Turca (Lemmings)》YM3812，48kHz 立体声，
+  63 秒实时播放推进正常，speaker 出声
+- mini libao 精要：只实现 vgmplay 所需的 ao_* 六函数（initialize/shutdown/
+  driver_id/default_driver_id/driver_info/open_live/play/close），
+  内部 snd_pcm 直开 "default"，零插件零 dlopen 零 libdl——
+  绕开了整个 libao 插件/dlopen/LDFLAGS 地狱
+- 部署位置：设备 /opt/libao/lib/libao.so.2（落在 /home 分区，rootfs 零占用）
+- 运行姿势：LD_LIBRARY_PATH=/opt/libao/lib ./vgmplay 曲目.vgm
+- 附：VGMPlay.ini SampleRate=48000 生效（48k 立体声直出 pulse）
+- 意义：交叉编译链 → 真机音频 → 2023 项目复活，三级火箭全部点亮。
+  下一步：YM2612 VGM 曲目实测 + skyraid C 版 GLES
