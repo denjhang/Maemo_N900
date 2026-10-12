@@ -646,3 +646,11 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 - 诚实保留项：SGX530 Maemo 驱动为 2009 PowerVR 闭源栈，EGL 有怪癖；
   最终以 powertop + 电池曲线实测为准（两后端做好后对比）
 - 依赖更新：C++ 路线重启（g++-arm-linux-gnueabi + 设备 libstdc++6 已有）
+
+### 廿三边界声明：libvgm 不上 N900（用户裁定）
+- YM2163-Midi/Denjhang_Music_Player_v16 里的 libvgm-modizer/player 是
+  PC 端（ma2play）引擎——现代高精度核比 vgmplay 的老 MAME 核更重，
+  600MHz A8 连老核都卡，libvgm 更不可能。不移植。
+- N900 音频引擎定案：STC 血统精简核（波表/PSG 已证流畅）+
+  轻量 OPL2 整数核换芯 + MAME YM2612 作对照
+- YM2163-Midi 里取用的唯一资产：**imgui 1.92.8 WIP 完整源码**（UI 用）
