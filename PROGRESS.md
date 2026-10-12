@@ -674,3 +674,16 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 ### 判决
 GPU 路线的阻塞点已从"未知"收敛为"SDL/GLES 上下文创建一步"，
 属纯工程问题非方向问题。今晚到此。
+
+### 廿六续：glX 幽灵符号攻坚实录（未破，证据全录）
+- 现象：SDL_SetVideoMode(OPENGL) → dlopen(libGLES_CM) 报
+  "undefined symbol: glXGetSwapIntervalMESA"
+- 已排除：①libGLES_CM 本体无此未定义符号（nm -D 实测 0 个 glX）
+  ②垫片 glxshim.so（导出该符号）已通过 exe NEEDED 最早加载+RTLD_GLOBAL
+  ③设备 ALSA→pulse 桥完好（ALSA 诊断器全绿）
+- 已尝试：垫片 RTLD_GLOBAL 预加载、exe NEEDED 直链、RTLD_LAZY、
+  SDL_GLES_SetVideoMode 全组合、LD_DEBUG（被 su/系统洗掉）
+- 未验证的最后假设：SDL_gles 的 SDL_GLES_Init 常量值猜错（SDL_GLES_1_1
+  可能≠1）或 SDL_GLES_SetAttribute 缺深度/缓冲配置；
+  破局钥匙 = 拉 libSDL_gles 源码读 SDL_gles.h 的确切枚举与用法
+- 软绘兜底完好：imgui_sdl→SDL1.2 移植版不依赖此链路
