@@ -654,3 +654,23 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
 - N900 音频引擎定案：STC 血统精简核（波表/PSG 已证流畅）+
   轻量 OPL2 整数核换芯 + MAME YM2612 作对照
 - YM2163-Midi 里取用的唯一资产：**imgui 1.92.8 WIP 完整源码**（UI 用）
+
+## 廿六、GPU 图形性能测试——现状与阻塞点（2026-10-12 深夜）
+### 已完成
+- build/gldemo4.c、gldemo5.c：完整的 GLES1.1 基准程序（三角形+300精灵双模式，
+  dlopen 运行时解析全部符号，链接零图形库依赖——BFD 断言完全绕开）
+- 设备侧准备：/usr/lib/libGL.so.1 → libGLES_CM.so 符号链接已建
+- GLES/EGL 运行库已入 sysroot（libGLES_CM/libEGL/libIMGegl/libsrv_um + Khronos 头）
+### 阻塞点（源码/二进制级定位）
+- SDL_GLES_SetVideoMode 全组合（flags×bpp 4 种）返回 NULL（SDL_SetError 为空）
+- 纯 SDL_SetVideoMode(OPENGL) → libGL.so.1 符号链接后段错误
+  （SDL 内部对桌面 GL 符号的 dlsym/调用撞上 GLES 库）
+### 下次开工的破局路径
+1. 拉 libSDL_gles 源码（maemo 仓）读 SDL_GLES_SetVideoMode 的确切前置条件
+   （SDL_Init 顺序/bpp/flags/环境变量），或
+2. 直接 EGL/X11 裸写（visualid 匹配方案已写一半在 gldemo2.c），或
+3. 参照已验证可用的 Maemo GLES 应用源码（如 freeglut 类 demo）抄初始化序列
+- 软绘兜底永远可用：imgui_sdl 移植版不依赖以上任何环节
+### 判决
+GPU 路线的阻塞点已从"未知"收敛为"SDL/GLES 上下文创建一步"，
+属纯工程问题非方向问题。今晚到此。
