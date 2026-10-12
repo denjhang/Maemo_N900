@@ -618,3 +618,15 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   优化路线（按序）：① 换轻量 OPL2 整数核（DOSBox 系/fmopl-lite 级别）
   ② conv_vol 式预计算查表改造（STC 范式）③ 降采样 22050 ④ NEON
   基线数据到手：这就是"未优化=卡"的对照组，优化后复测同一曲目即见真章
+
+## 廿四、UI 框架定案：ImGui + imgui_sdl 软渲染 → SDL1.2 移植（2026-10-12）
+- 调研：Nuklear 因语言支持坑被否；**定 ImGui**
+- 后端选定：Tyyppi77/imgui_sdl ★182（MIT，676 行，已收 research/imgui-sdl/）
+  **内置 CPU 软件光栅化，零 GPU 依赖**——与 skyraid 软绘路线同宗
+- SDL2 依赖面仅 ~20 函数（Texture/RenderCopy/ClipRect/Blend/事件）
+  → SDL1.2 移植：~250 行兼容垫片 + 光栅化器内直接染色（~20 行）
+- 配套：C++ 交叉需 g++-arm-linux-gnueabi（apt 即装）；设备 libstdc++6
+  用 Maemo 自带运行库；ImGui 版本钉 1.8x 系
+- 性能预估：600MHz 软绘 800x480 播放器 UI ≈ 20-30fps 可接受；
+  备用升级路：GLES1.1 ImGui 后端（Dukinja/Swordigo 先例）上 SGX 硬件加速
+- ImGui 与 VGM 引擎解耦并行：PCM 环形缓冲对接
