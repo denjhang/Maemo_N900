@@ -67,16 +67,16 @@ static void (*pglEnableClientState)(unsigned);
 } while (0)
 
 
-/* extra X11 */
-typedef struct { void *ext_data; unsigned long visualid; int screen; int depth; int c_class; unsigned long red_mask, green_mask, blue_mask; int colormap_size; int bits_per_rgb; } XVisualInfo;
-extern int XMatchVisualInfo(void *, int, int, int, XVisualInfo *);
+/* extra X11 — real XVisualInfo layout (visual pointer included) */
+typedef struct { void *ext_data; void *visual; unsigned long visualid; int screen; int depth; int c_class; unsigned long red_mask, green_mask, blue_mask; int colormap_size; int bits_per_rgb; } XVisualInfo;
+#define VisualIDMask 0x1
 typedef unsigned long XColormap;
 extern XColormap XCreateColormap(void *, unsigned long, void *, int);
 extern unsigned long XCreateWindow(void *, unsigned long, int, int, unsigned int, unsigned int, unsigned int, int, unsigned int, void *, unsigned long, void *);
 #define TrueColor 4
 #define AllocNone 0
 #define CWColormap (1L<<13)
-static int (*pXMatchVisualInfo)(void *, int, int, int, void *);
+static void **(*pXGetVisualInfo)(void *, long, XVisualInfo *, int *);
 static XColormap (*pXCreateColormap)(void *, unsigned long, void *, int);
 static unsigned long (*pXCreateWindow)(void *, unsigned long, int, int, unsigned int, unsigned int, unsigned int, int, unsigned int, void *, unsigned long, void *);
 #define EGL_NATIVE_VISUAL_ID 0x302E
@@ -91,7 +91,7 @@ static unsigned long (*pXCreateWindow)(void *, unsigned long, int, int, unsigned
 #define EGL_RENDERABLE_TYPE 0x3040
 #define EGL_OPENGL_ES_BIT 0x0001
 #define EGL_NONE 0x3038
-#define EGL_OPENGL_ES_API 0x3097
+#define EGL_CONTEXT_CLIENT_VERSION 0x3098
 /* GLES constants */
 #define GL_COLOR_BUFFER_BIT 0x4000
 #define GL_DEPTH_BUFFER_BIT 0x100
@@ -118,7 +118,6 @@ static int load_syms(void) {
     DLSYM(hX11, pXMapWindow, "XMapWindow");
     DLSYM(hX11, pXStoreName, "XStoreName");
     DLSYM(hX11, pXSync, "XSync");
-    DLSYM(hX11, pXMatchVisualInfo, "XMatchVisualInfo");
     DLSYM(hX11, pXCreateColormap, "XCreateColormap");
     DLSYM(hX11, pXCreateWindow, "XCreateWindow");
     DLSYM(hEGL, peglInitialize, "eglInitialize");
@@ -162,13 +161,41 @@ static int init_gfx(int w, int h) {
     eglD = fnGetDisplay(NULL);
     if (!eglD) { printf("eglGetDisplay FAIL\n"); return 1; }
     if (!peglInitialize(eglD, NULL, NULL)) { printf("eglInitialize FAIL err=%x\n", peglGetError()); return 1; }
-    int cfgA[] = { EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RED_SIZE, 5,
-                   EGL_GREEN_SIZE, 6, EGL_BLUE_SIZE, 5, EGL_NONE };
+    /* PPSSPP-maemo config: 16bpp buffer, 16-bit depth, GLES1 renderable */
+#define EGL_BUFFER_SIZE 0x3020
+#define EGL_DEPTH_SIZE 0x3025
+#define EGL_RENDERABLE_TYPE 0x3040
+#define EGL_OPENGL_ES_BIT 0x0001
+#define EGL_SAMPLE_BUFFERS 0x3032
+    int cfgA[] = { EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                   EGL_RED_SIZE, 5, EGL_GREEN_SIZE, 6, EGL_BLUE_SIZE, 5,
+                   EGL_BUFFER_SIZE, 16, EGL_DEPTH_SIZE, 16,
+                   EGL_RENDERABLE_TYPE, EGL_OPENGL_ES_BIT,
+                   EGL_SAMPLE_BUFFERS, 0, EGL_NONE };
+    /* find the X default visual id, ask EGL for a config matching it */
+    static unsigned long (*pXVisualIDFromVisual)(void *);
+    static void *(*pXDefaultVisual)(void *, int);
+    if (!pXVisualIDFromVisual) {
+        pXVisualIDFromVisual = dlsym(hX11, "XVisualIDFromVisual");
+        pXDefaultVisual = dlsym(hX11, "XDefaultVisual");
+    }
+    unsigned long defvid = 0;
+    if (pXVisualIDFromVisual && pXDefaultVisual)
+        defvid = pXVisualIDFromVisual(pXDefaultVisual(xdpy, scr));
+    printf("X default visual id: %lu\n", defvid);
     void *cfg = NULL;
     int ncfg = 0;
-    if (!peglChooseConfig(eglD, cfgA, &cfg, 1, &ncfg) || ncfg < 1) {
-        printf("eglChooseConfig FAIL n=%d err=%x\n", ncfg, peglGetError());
-        return 1;
+    int cfgA2[] = { EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                    EGL_NATIVE_VISUAL_ID, (int)defvid, EGL_NONE };
+    if (defvid && peglChooseConfig(eglD, cfgA2, &cfg, 1, &ncfg) && ncfg >= 1) {
+        printf("config matched default visual\n");
+    } else {
+        int cfgA[] = { EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                       EGL_RED_SIZE, 5, EGL_GREEN_SIZE, 6, EGL_BLUE_SIZE, 5, EGL_NONE };
+        if (!peglChooseConfig(eglD, cfgA, &cfg, 1, &ncfg) || ncfg < 1) {
+            printf("eglChooseConfig FAIL n=%d err=%x\n", ncfg, peglGetError());
+            return 1;
+        }
     }
     int visualid = 0;
     unsigned int dummy = 0;
@@ -176,30 +203,35 @@ static int init_gfx(int w, int h) {
     if (fnGetConfigAttrib) fnGetConfigAttrib(eglD, cfg, EGL_NATIVE_VISUAL_ID, (unsigned *)&visualid);
     printf("config native visual id: %d\n", visualid);
 
-    XVisualInfo vi;
-    memset(&vi, 0, sizeof(vi));
-    int have_vis = 0;
-    if (visualid) {
-        if (pXMatchVisualInfo(xdpy, scr, visualid, TrueColor, &vi)) have_vis = 1;
+    /* window must use the EGL config's visual */
+    if (!pXGetVisualInfo) pXGetVisualInfo = dlsym(hX11, "XGetVisualInfo");
+    int got_vis = 0;
+    XVisualInfo vitmpl, *pvi = NULL;
+    int nvi = 0;
+    memset(&vitmpl, 0, sizeof(vitmpl));
+    vitmpl.visualid = (unsigned long)visualid;
+    if (pXGetVisualInfo) {
+        XVisualInfo **list = (XVisualInfo **)pXGetVisualInfo(xdpy, VisualIDMask, &vitmpl, &nvi);
+        if (list && nvi > 0) { pvi = *list; got_vis = 1; }
     }
-    XColormap cmap;
-    unsigned long xwin;
-    if (have_vis) {
-        cmap = pXCreateColormap(xdpy, pXRootWindow(xdpy, scr), (void *)vi.visual, AllocNone);
+    printf("window visual lookup: visualid=%d got=%d depth=%d\n",
+           visualid, got_vis, got_vis ? pvi->depth : -1);
+    if (got_vis && pvi) {
+        XColormap cmap = pXCreateColormap(xdpy, pXRootWindow(xdpy, scr),
+                                          pvi->visual, AllocNone);
         unsigned long vmask = CWColormap;
-        xwin = pXCreateWindow(xdpy, pXRootWindow(xdpy, scr), 0, 0, w, h, 0,
-                              vi.depth, 1 /*InputOutput*/, (void *)vi.visual, vmask, &cmap);
+        unsigned long xattr[16] = {0};
+        xattr[13] = (unsigned long)cmap; /* XSetWindowAttributes.colormap */
+        win = pXCreateWindow(xdpy, pXRootWindow(xdpy, scr), 0, 0, w, h, 0,
+                             pvi->depth, 1 /*InputOutput*/, pvi->visual, vmask, xattr);
     } else {
-        cmap = pXCreateColormap(xdpy, pXRootWindow(xdpy, scr),
-                                (void *)0, AllocNone); /* fallback */
-        xwin = pXCreateSimpleWindow(xdpy, pXRootWindow(xdpy, scr), 0, 0, w, h, 0, 0, 0);
+        win = pXCreateSimpleWindow(xdpy, pXRootWindow(xdpy, scr), 0, 0, w, h, 0, 0, 0);
     }
-    win = xwin;
     pXStoreName(xdpy, win, "GLDemo");
     pXMapWindow(xdpy, win);
     pXSync(xdpy, 0);
 
-    int ctxA[] = { EGL_OPENGL_ES_API, EGL_NONE };
+    int ctxA[] = { EGL_CONTEXT_CLIENT_VERSION, 1, EGL_NONE };
     eglS = peglCreateWindowSurface(eglD, cfg, win, NULL);
     if (!eglS) { printf("eglCreateWindowSurface FAIL err=%x\n", peglGetError()); return 1; }
     eglC = peglCreateContext(eglD, cfg, NULL, ctxA);
