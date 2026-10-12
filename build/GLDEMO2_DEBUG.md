@@ -6,6 +6,17 @@
 3. 最终成绩（EXIT=0，DEMO COMPLETE）：triangles 61.8 FPS / sprites(300) 49-50 FPS（vsync 封顶）。
 4. 教训：本次崩在 mode q/e 首个绘制调用 + /tmp 满，两条线叠加成了"88 但零日志"的迷雾。部署/编译坑：WSL /tmp 每次调用会被清空，cp 到 /tmp 再编译必须单条命令内完成；/mnt/e 偶发写 0 字节文件，部署前校验 md5。
 
+## 全屏（Hildon）recipe——2026-10-13 当天解决，出处 Nokia glmemperf native_x11.c
+权威实现：`research/garage_maemo/pkgs/glmemperf-src/glmemperf-0.1/native_x11.c:110-160`。gldemo2/gldemo_scene 均已内置（set_fullscreen_props + send_fullscreen_msg）。
+1. map 前：设属性 `_HILDON_NON_COMPOSITED_WINDOW` = 1（类型 XA_INTEGER=12）——关合成器，eglSwapBuffers 直通 framebuffer，帧率 61.8→81.0 / 49.3→74.6
+2. map 前：设属性 `_NET_WM_STATE`（类型 XA_ATOM=4）= `_NET_WM_STATE_FULLSCREEN` atom
+3. **XMapWindow + XSync 之后**才向根窗口发 `_NET_WM_STATE` ClientMessage（l[0]=ADD, l[1]=FULLSCREEN, 掩码只 SubstructureNotifyMask）——**map 前发无效**
+4. 踩过的坑（别再犯）：
+   - XA_ATOM 是 4 不是 6（6=XCARDINAL）、XA_INTEGER 是 12 不是 4。X 服务端不校验属性类型，写错类型"成功"但 hildon-desktop 静默忽略
+   - override_redirect=True：窗口盖住桌面但状态栏（hildon-desktop 自绘顶层）仍在上，且行为像病毒——别用
+   - 只发 ClientMessage 不设属性 / 只设属性不发消息 / 消息发在 map 前——三种都不行，必须三件套齐全
+   - Fremantle 上不要设 `_NET_WM_WINDOW_TYPE_OVERRIDE`（Diablo 的做法，glmemperf 明确 #ifdef 区分）
+
 
 ## 背景与当前状态
 - 程序：`build/gldemo2.c`，N900 GLES1.1 GPU 基准（三角形 + 300 精灵）

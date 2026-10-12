@@ -111,6 +111,53 @@ typedef unsigned short GLushort;
 #define GL_VERTEX_ARRAY 0x8074
 #define GL_COLOR_ARRAY 0x8076
 
+static int (*pXInternAtom)(void *, const char *, int);
+static int (*pXChangeProperty)(void *, unsigned long, unsigned long, unsigned long, int, int, const unsigned char *, int);
+static int (*pXSendEvent)(void *, unsigned long, int, unsigned long, void *);
+#define XA_ATOM 4
+#define XA_INTEGER 12
+#define PropModeReplace 0
+#define SubstructureNotifyMask (1L<<19)
+/* Hildon fullscreen — verbatim from Nokia glmemperf native_x11.c.
+   Constants matter: XA_ATOM=4, XA_INTEGER=12 (hand-guessed 6/4 = wrong types,
+   hildon-desktop silently ignores mistyped properties).
+   The _NET_WM_STATE ClientMessage MUST be sent AFTER XMapWindow. */
+static void set_fullscreen_props(void *xdpy, unsigned long w) {
+    if (!pXInternAtom || !pXChangeProperty) return;
+    unsigned long a_noncomp = pXInternAtom(xdpy, "_HILDON_NON_COMPOSITED_WINDOW", 0);
+    unsigned long a_state = pXInternAtom(xdpy, "_NET_WM_STATE", 0);
+    unsigned long a_fs = pXInternAtom(xdpy, "_NET_WM_STATE_FULLSCREEN", 0);
+    int one = 1;
+    if (a_noncomp)
+        pXChangeProperty(xdpy, w, a_noncomp, XA_INTEGER, 32,
+                         PropModeReplace, (unsigned char *)&one, 1);
+    if (a_state && a_fs)
+        pXChangeProperty(xdpy, w, a_state, XA_ATOM, 32, PropModeReplace,
+                         (unsigned char *)&a_fs, 1);
+}
+static void send_fullscreen_msg(void *xdpy, unsigned long w) {
+    unsigned long a_state, a_fs, root;
+    if (!pXInternAtom || !pXSendEvent || !pXRootWindow) return;
+    a_state = pXInternAtom(xdpy, "_NET_WM_STATE", 0);
+    a_fs = pXInternAtom(xdpy, "_NET_WM_STATE_FULLSCREEN", 0);
+    if (!a_state || !a_fs) return;
+    {
+        struct { int type; unsigned long serial, send_event, display, window;
+                 int message_type, format;
+                 long l[5]; } ev;
+        memset(&ev, 0, sizeof ev);
+        ev.type = 33; /* ClientMessage */
+        ev.window = w;
+        ev.message_type = (int)a_state;
+        ev.format = 32;
+        ev.l[0] = 1;        /* _NET_WM_STATE_ADD */
+        ev.l[1] = (long)a_fs;
+        ev.l[2] = 0;
+        root = pXRootWindow(xdpy, 0);
+        pXSendEvent(xdpy, root, 0, SubstructureNotifyMask, &ev);
+    }
+}
+
 static int load_syms(void) {
     printf("L: dlopen libX11\n");
     hX11 = dlopen("libX11.so.6", RTLD_NOW | RTLD_GLOBAL);
@@ -129,6 +176,9 @@ static int load_syms(void) {
     DLSYM(hX11, pXMapWindow, "XMapWindow");
     DLSYM(hX11, pXStoreName, "XStoreName");
     DLSYM(hX11, pXSync, "XSync");
+    *(void **)(&pXInternAtom) = dlsym(hX11, "XInternAtom");
+    *(void **)(&pXChangeProperty) = dlsym(hX11, "XChangeProperty");
+    *(void **)(&pXSendEvent) = dlsym(hX11, "XSendEvent");
     DLSYM(hX11, pXCreateColormap, "XCreateColormap");
     DLSYM(hX11, pXCreateWindow, "XCreateWindow");
     DLSYM(hEGL, peglInitialize, "eglInitialize");
@@ -254,8 +304,10 @@ static int init_gfx(int w, int h) {
         win = pXCreateSimpleWindow(xdpy, pXRootWindow(xdpy, scr), 0, 0, w, h, 0, 0, 0);
     }
     pXStoreName(xdpy, win, "GLDemo");
+    set_fullscreen_props(xdpy, win);
     pXMapWindow(xdpy, win);
     pXSync(xdpy, 0);
+    send_fullscreen_msg(xdpy, win);  /* must come after map (glmemperf) */
 
     int ctxA[] = { EGL_CONTEXT_CLIENT_VERSION, 1, EGL_NONE };
     eglS = peglCreateWindowSurface(eglD, cfg, win, NULL);
