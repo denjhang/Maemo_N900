@@ -68,6 +68,7 @@ static int (*snd_pcm_set_params)(snd_pcm_t *, int, int, unsigned, unsigned, int,
 static long (*snd_pcm_writei)(snd_pcm_t *, const void *, unsigned long);
 static int (*snd_pcm_close)(snd_pcm_t *);
 static int (*snd_pcm_prepare)(snd_pcm_t *);
+static int (*snd_pcm_drop)(snd_pcm_t *);
 typedef struct snd_pcm_hw_params snd_pcm_hw_params_t;
 typedef struct snd_pcm_sw_params snd_pcm_sw_params_t;
 static int (*snd_pcm_hw_params_any)(snd_pcm_t *, snd_pcm_hw_params_t *);
@@ -259,6 +260,7 @@ static int load_syms(void) {
         snd_pcm_writei = dlsym(hALSA, "snd_pcm_writei");
         snd_pcm_close = dlsym(hALSA, "snd_pcm_close");
         snd_pcm_prepare = dlsym(hALSA, "snd_pcm_prepare");
+        snd_pcm_drop = dlsym(hALSA, "snd_pcm_drop");
         snd_pcm_hw_params_any = dlsym(hALSA, "snd_pcm_hw_params_any");
         snd_pcm_hw_params_set_access = dlsym(hALSA, "snd_pcm_hw_params_set_access");
         snd_pcm_hw_params_set_format = dlsym(hALSA, "snd_pcm_hw_params_set_format");
@@ -546,6 +548,11 @@ static void *audio_writer(void *arg) {
     short chunk[PERIOD * 2];
     /* generator lives IN the writer thread: UI can stall forever,
        audio never notices (deadbeef output-thread pattern) */
+    {
+        /* silence pad: DMA spins up on zeros instead of popping on signal */
+        static const short zeros[PERIOD * 2];
+        snd_pcm_writei(pcm, zeros, PERIOD);
+    }
     while (thread_run) {
         double t_before = now();
         if (audio_deadline && now() > audio_deadline)
@@ -585,10 +592,47 @@ static void *audio_writer(void *arg) {
     return NULL;
 }
 
+/* vgmplay lifecycle: open fresh per play session (ao_open_live per song,
+   ao_close at end). A reused PCM carries stale DMA/pointer state after
+   drop = crackle/noise on repeat PLAY. Retry covers pulse hand-back. */
+static int audio_open_device(void) {
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
+            printf("AUDIO: plughw:0,0 opened (attempt %d)\n", attempt + 1);
+            return 1;
+        }
+        if (usleep_fn) usleep_fn(100000);
+    }
+    if (snd_pcm_open(&pcm, "default", 0, 0) == 0) {
+        printf("AUDIO: via pulse default\n");
+        return 1;
+    }
+    printf("AUDIO: no device\n");
+    return 0;
+}
+
 int audio_start(int seconds) {
-    if (!pcm || !pthread_create_fn) return 0;
+    if (!snd_pcm_open || !pthread_create_fn) return 0;
     if (thread_run) audio_stop_full();
-    if (snd_pcm_prepare) snd_pcm_prepare(pcm); /* fresh start each time */
+    if (!audio_open_device()) return 0;
+    char hwp[512], swp[128];
+    int er = 0;
+    er |= snd_pcm_hw_params_any(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
+    er |= snd_pcm_hw_params_set_access(pcm, (snd_pcm_hw_params_t *)hwp, 3) < 0;
+    er |= snd_pcm_hw_params_set_format(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
+    er |= snd_pcm_hw_params_set_channels(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
+    unsigned rate = 44100; int dir = 0;
+    er |= snd_pcm_hw_params_set_rate_near(pcm, (snd_pcm_hw_params_t *)hwp, &rate, &dir) < 0;
+    unsigned long ps = 1024;
+    er |= snd_pcm_hw_params_set_period_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &ps, &dir) < 0;
+    unsigned long bs = 32768;
+    er |= snd_pcm_hw_params_set_buffer_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &bs) < 0;
+    er |= snd_pcm_hw_params(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
+    if (!er) {
+        snd_pcm_sw_params_current(pcm, (snd_pcm_sw_params_t *)swp);
+        snd_pcm_sw_params_set_start_threshold(pcm, (snd_pcm_sw_params_t *)swp, 1024);
+        snd_pcm_sw_params(pcm, (snd_pcm_sw_params_t *)swp);
+    }
     audio_phase = 0;
     audio_deadline = seconds ? now() + seconds : 0;
     thread_run = 1;
@@ -600,11 +644,17 @@ int audio_start(int seconds) {
 }
 
 void audio_stop_full(void) {
+    /* DROP FIRST: unblocks writei instantly (writer usually blocked on a
+       full buffer); then join; then CLOSE - fresh state for next PLAY */
+    if (pcm && snd_pcm_drop)
+        snd_pcm_drop(pcm);
     if (thread_run) {
         thread_run = 0;
         if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
-        printf("AUDIO: writer stopped (pcm held)\n");
     }
+    if (pcm && snd_pcm_close)
+        snd_pcm_close(pcm);
+    pcm = NULL;
     audio_deadline = 0;
     audio_on = 0;
 }
@@ -657,39 +707,6 @@ int main(void) {
         printf("privdrop uid=%d\n", (int)getuid());
     }
     if (init_gfx(W, H)) return 1;
-    /* grab the sound card ONCE, hold for entire app lifetime - pulse is
-       on-demand (module-suspend-idle): after idle it releases hw, we take
-       it and never let go. No open/close racing, no EBUSY intermittency. */
-    if (snd_pcm_open) {
-        if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
-            char hwp[512], swp[128];
-            int er = 0;
-            er |= snd_pcm_hw_params_any(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
-            er |= snd_pcm_hw_params_set_access(pcm, (snd_pcm_hw_params_t *)hwp, 3) < 0;
-            er |= snd_pcm_hw_params_set_format(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
-            er |= snd_pcm_hw_params_set_channels(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
-            unsigned rate = 44100; int dir = 0;
-            er |= snd_pcm_hw_params_set_rate_near(pcm, (snd_pcm_hw_params_t *)hwp, &rate, &dir) < 0;
-            unsigned long ps = 1024;
-            er |= snd_pcm_hw_params_set_period_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &ps, &dir) < 0;
-            unsigned long bs = 32768;
-            er |= snd_pcm_hw_params_set_buffer_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &bs) < 0;
-            er |= snd_pcm_hw_params(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
-            if (!er) {
-                snd_pcm_sw_params_current(pcm, (snd_pcm_sw_params_t *)swp);
-                snd_pcm_sw_params_set_start_threshold(pcm, (snd_pcm_sw_params_t *)swp, 1024);
-                snd_pcm_sw_params(pcm, (snd_pcm_sw_params_t *)swp);
-            }
-            printf("AUDIO: hw held from startup (%s rate=%u)\n", er ? "PARAMS FAIL" : "OK", rate);
-        } else if (snd_pcm_open(&pcm, "default", 0, 0) == 0) {
-            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 1000000);
-            printf("AUDIO: via pulse default (hw busy at boot)\n");
-        } else {
-            printf("AUDIO: no device\n");
-        }
-    }
-
-
     build_cube();
     IGlfns fns;
     memset(&fns, 0, sizeof fns);
