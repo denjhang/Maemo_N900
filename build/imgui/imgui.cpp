@@ -1391,6 +1391,16 @@ extern "C" void (*ImGui_g_MinimizeCallback)(const char* window_title);
 void (*ImGui_g_MinimizeCallback)(const char* window_title) = nullptr;
 
 // IMRUN: BACK button popup support (extern "C" so shell can call)
+extern "C" bool ImGui_IsWindowDocked(const char* name)
+{
+    ImGuiWindow* w = FindWindowByName(name);
+    return w && w->DockIsActive;
+}
+extern "C" void ImGui_SetWindowFocusByName(const char* name)
+{
+    ImGuiWindow* w = FindWindowByName(name);
+    if (w) FocusWindow(w);
+}
 extern "C" bool ImGui_GetWindowPosByName(const char* name, float* x, float* y)
 {
     ImGuiWindow* w = FindWindowByName(name);

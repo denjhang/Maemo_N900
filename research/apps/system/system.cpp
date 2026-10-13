@@ -11,7 +11,7 @@ extern char hw[8][96];
 extern int hw_n;
 }
 
-extern "C" const char *imapp_name(void) { return "SYSTEM"; }
+extern "C" const char *imapp_name(void) { return "SETTINGS"; }
 extern "C" int imapp_system(void) { return 1; }
 extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
     ImDrawList *dl = (ImDrawList *)dlv;
@@ -25,7 +25,7 @@ extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
 extern "C" void imapp_frame(double t) {
     (void)t;
     if (ImGui::BeginTabBar("systabs")) {
-        if (ImGui::BeginTabItem("LOOKS")) {
+        if (ImGui::BeginTabItem("WALLPAPER")) {
             const char *modes[4] = {"3D DYNAMIC", "3D STATIC", "2D DYNAMIC", "2D STATIC"};
             int m = g_wall_mode;
             if (ImGui::Combo("MODE", &m, modes, 4)) g_wall_mode = m;

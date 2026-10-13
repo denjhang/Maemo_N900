@@ -289,3 +289,10 @@
 ### v0.4.1 发布记录（2026-10-14）
 - 发布包: research/releases/imrun_release_v0.4.1.tar.gz（主程序源码+二进制、patched imgui 全源、9 插件源码、图标资产、全套文档）
 - v0.4.1 = 统一插件架构 + 渲染后端恢复；音频/键盘/生命周期基线全部继承
+
+## IMRUN v0.4.2（2026-10-14，四项修复：动画覆盖内容 / 壁纸入口 / 可逆卸载 / 焦点跳变）
+- 二进制 md5: 8faf6c5b4a0bf00b073675bbce8291e0（/home/user/imrun/imrun）
+- **关闭动画覆盖内容**：停靠窗口内容画进宿主绘制列表、子窗 alpha 管不到（=只有窗体渐变）——关闭时先强制解除停靠变浮动再淡出，内容一并渐变；停靠态打开跳过淡入避免半截效果（核心导出 ImGui_IsWindowDocked/SetWindowFocusByName）
+- **SYSTEM→SETTINGS，第一页更名 WALLPAPER**——壁纸设置入口显性化
+- **本地应用商店**：/home/user/imrun/repo/ 预置 7 个插件；APPMGR 新 STORE 页列出可装应用（含 [installed] 标记）；**卸载=移回仓库**（mv 而非 rm），STORE 一键重装——彻底可逆
+- **关窗后桌面图标高亮跳变根因**：键盘导航选中框（g_desk_nav_sel）残留，关窗焦点回桌面时旧框突然显现——任何窗口开关清空导航态，且高亮仅在按过方向键后显示（g_desk_nav_on）

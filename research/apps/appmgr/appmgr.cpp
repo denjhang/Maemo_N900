@@ -1,13 +1,15 @@
-/* IMRUN system plugin: APPMGR (install/manage). Protected plugin. */
+/* IMRUN system plugin: APPMGR - local app store + USB install,
+   reversible uninstall (moves back to store). Protected plugin. */
 #include "imgui.h"
 #include <dirent.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 extern "C" {
 int imrun_dyn_count(void);
 const char *imrun_dyn_name(int i);
-int imrun_dyn_state(int i);            /* 0 stop 1 bg 2 run */
+int imrun_dyn_state(int i);
 void imrun_dyn_kill(int i);
 void imrun_dyn_uninstall(int i);
 void imrun_host_rescan(void);
@@ -29,11 +31,40 @@ extern "C" void imapp_frame(double t) {
     (void)t;
     static char filter[40] = "";
     if (ImGui::BeginTabBar("mgr")) {
-        if (ImGui::BeginTabItem("INSTALL")) {
-            ImGui::TextUnformatted("source: /home/user/MyDocs (.so / .imapp via USB)");
-            if (ImGui::Button("RESCAN NOW", ImVec2(-1, 40)))
-                imrun_host_rescan();
+        if (ImGui::BeginTabItem("STORE")) {
+            ImGui::TextUnformatted("local app store: /home/user/imrun/repo");
+            ImGui::TextUnformatted("uninstalled apps return here - NOTHING is lost");
+            ImGui::Separator();
             ImGui::InputTextWithHint("##flt", "filter...", filter, sizeof filter);
+            DIR *d = opendir("/home/user/imrun/repo");
+            if (d) {
+                struct dirent *e;
+                while ((e = readdir(d))) {
+                    if (e->d_name[0] == '.') continue;
+                    if (filter[0] && !strstr(e->d_name, filter)) continue;
+                    bool installed = false;
+                    int n = imrun_dyn_count();
+                    for (int k = 0; k < n; k++)
+                        if (strcmp(imrun_dyn_name(k), e->d_name) == 0) installed = true;
+                    ImGui::BulletText("%s%s", e->d_name, installed ? "  [installed]" : "");
+                    ImGui::SameLine(300);
+                    char bid[80];
+                    snprintf(bid, sizeof bid, "INSTALL##r%s", e->d_name);
+                    if (ImGui::Button(bid, ImVec2(130, 32))) {
+                        char cmd[200];
+                        snprintf(cmd, sizeof cmd,
+                                 "rm -rf /home/user/imrun/apps/%s && cp -r /home/user/imrun/repo/%s /home/user/imrun/apps/%s",
+                                 e->d_name, e->d_name, e->d_name);
+                        system(cmd);
+                        imrun_host_rescan();
+                    }
+                }
+                closedir(d);
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("USB")) {
+            ImGui::TextUnformatted("source: /home/user/MyDocs (.so / .imapp)");
             DIR *d = opendir("/home/user/MyDocs");
             if (d) {
                 struct dirent *e;
@@ -41,8 +72,6 @@ extern "C" void imapp_frame(double t) {
                     const char *ext = strrchr(e->d_name, '.');
                     if (!ext || (strcmp(ext, ".so") && strcmp(ext, ".imapp"))) continue;
                     if (filter[0] && !strstr(e->d_name, filter)) continue;
-                    char path[160];
-                    snprintf(path, sizeof path, "/home/user/MyDocs/%s", e->d_name);
                     ImGui::BulletText("%s", e->d_name);
                     ImGui::SameLine(300);
                     char bid[80];
@@ -51,14 +80,11 @@ extern "C" void imapp_frame(double t) {
                         char cmd[256], idname[40];
                         snprintf(idname, sizeof idname, "%.*s", (int)(ext - e->d_name), e->d_name);
                         if (!strcmp(ext, ".imapp"))
-                            snprintf(cmd, sizeof cmd,
-                                     "mkdir -p /home/user/imrun/apps && cd /home/user/imrun/apps && rm -rf %s && tar xzf %s",
-                                     idname, path);
+                            snprintf(cmd, sizeof cmd, "mkdir -p /home/user/imrun/apps && cd /home/user/imrun/apps && rm -rf %s && tar xzf /home/user/MyDocs/%s", idname, e->d_name);
                         else
-                            snprintf(cmd, sizeof cmd,
-                                     "mkdir -p /home/user/imrun/apps/%s && cp %s /home/user/imrun/apps/%s/app.so",
-                                     idname, path, idname);
+                            snprintf(cmd, sizeof cmd, "mkdir -p /home/user/imrun/apps/%s && cp /home/user/MyDocs/%s /home/user/imrun/apps/%s/app.so", idname, e->d_name, idname);
                         system(cmd);
+                        imrun_host_rescan();
                     }
                 }
                 closedir(d);
@@ -67,7 +93,7 @@ extern "C" void imapp_frame(double t) {
         }
         if (ImGui::BeginTabItem("MANAGE")) {
             int n = imrun_dyn_count();
-            ImGui::Text("installed plugins: %d", n);
+            ImGui::Text("installed: %d (uninstall moves back to STORE)", n);
             ImGui::Separator();
             for (int k = 0; k < n; k++) {
                 const char *nm = imrun_dyn_name(k);
@@ -76,7 +102,7 @@ extern "C" void imapp_frame(double t) {
                             st == 2 ? "running" : st == 1 ? "background" : "stopped");
                 ImGui::SameLine(280);
                 char kid[48], uid[48];
-                snprintf(kid, sizeof kid, "KILL##m%d", k);
+                snprintf(kid, sizeof kid, "STOP##m%d", k);
                 snprintf(uid, sizeof uid, "UNINSTALL##m%d", k);
                 if (st && ImGui::Button(kid, ImVec2(60, 30)))
                     imrun_dyn_kill(k);
@@ -86,8 +112,6 @@ extern "C" void imapp_frame(double t) {
                     imrun_dyn_uninstall(k);
                 ImGui::PopStyleColor();
             }
-            ImGui::Separator();
-            ImGui::TextUnformatted("long-press a desktop icon for quick uninstall");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

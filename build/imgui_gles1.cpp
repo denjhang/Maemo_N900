@@ -269,6 +269,7 @@ extern "C" void imrun_host_rescan(void) { g_dyn_scan_cnt = 1000; }
 static char g_desk_filter[32] = "";
 static bool g_desk_edit = false;
 static int g_desk_nav_sel = -1;
+static bool g_desk_nav_on = false;  /* only show highlight after a keypress */
 bool g_ctrl_down = false;
 static bool g_win_move = false;
 static float g_nudge_dx = 0, g_nudge_dy = 0;
@@ -276,6 +277,7 @@ static float g_back_hl = 0, g_home_hl = 0;
 
 static int g_focus = -1;
 static void dyn_focus(int di) {
+    g_desk_nav_sel = -1; g_desk_nav_on = false;
     if (di < 0 || di >= g_dyn_n) return;
     DynApp &a = g_dyn[di];
     if (!a.ever) { a.cascade = true; a.ever = true; }
@@ -289,6 +291,7 @@ static void dyn_minimize_all(void) {
     g_focus = -1;
 }
 static void dyn_close(int di) {
+    g_desk_nav_sel = -1; g_desk_nav_on = false;
     if (di<0||di>=g_dyn_n) return;
     if (g_dyn[di].open && !g_dyn[di].closing) {
         g_dyn[di].closing = true; g_dyn[di].close_t0 = now_double();
@@ -350,12 +353,14 @@ void igui_special_key(unsigned ks, int down) {
     if (down && g_focus < 0 && !g_desk_edit) {
         int total = g_dyn_n;
         if (total > 0) {
+            if (ks == 0xff51 || ks == 0xff52 || ks == 0xff53 || ks == 0xff54)
+                g_desk_nav_on = true;
             if (g_desk_nav_sel < 0) g_desk_nav_sel = 0;
             if (ks == 0xff51 && g_desk_nav_sel % 4 > 0) g_desk_nav_sel--;
             else if (ks == 0xff53 && g_desk_nav_sel % 4 < 3 && g_desk_nav_sel + 1 < total) g_desk_nav_sel++;
             else if (ks == 0xff52 && g_desk_nav_sel >= 4) g_desk_nav_sel -= 4;
             else if (ks == 0xff54 && g_desk_nav_sel + 4 < total) g_desk_nav_sel += 4;
-            else if (ks == 0xff0d || ks == 0xff0a) { dyn_focus(g_desk_nav_sel); g_desk_nav_sel = -1; return; }
+            else if (ks == 0xff0d || ks == 0xff0a) { int sv = g_desk_nav_sel; g_desk_nav_sel = -1; g_desk_nav_on = false; dyn_focus(sv); return; }
         }
         if (ks == 0xff51 || ks == 0xff52 || ks == 0xff53 || ks == 0xff54) return;
     }
@@ -542,17 +547,40 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
         ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
         ImGui::SetNextWindowSize(cs, ImGuiCond_Always);
     }
+    extern bool ImGui_IsWindowDocked(const char *);
+    char ttl[80];
+    snprintf(ttl, sizeof ttl, "%s###dyn%d", a.name, di);
+    bool docked = ImGui_IsWindowDocked(ttl);
     if (a.closing) {
+        if (docked) {  /* undock so the fade covers the CONTENT too
+                          (docked content draws into the host's list) */
+            extern bool ImGui_GetWindowPosByName(const char *, float *, float *);
+            float wx, wy;
+            if (ImGui_GetWindowPosByName(ttl, &wx, &wy))
+                ImGui::SetNextWindowPos(ImVec2(wx, wy), ImGuiCond_Always);
+            docked = false;
+        }
         float t = (float)(now_double() - a.close_t0) / 0.5f;
         if (t >= 1.0f) {
             a.open = false; a.closing = false; a.mini = false;
             if (a.destroy) a.destroy();
+            /* hand focus to the next open app - no desktop focus jump */
+            for (int k = 0; k < g_dyn_n; k++) {
+                if (g_dyn[k].open && !g_dyn[k].mini && !g_dyn[k].closing) {
+                    extern void ImGui_SetWindowFocusByName(const char *);
+                    char tn2[80];
+                    snprintf(tn2, sizeof tn2, "%s###dyn%d", g_dyn[k].name, k);
+                    ImGui_SetWindowFocusByName(tn2);
+                    g_focus = k;
+                    break;
+                }
+            }
             return false;
         }
         float e = t * t * (3 - 2 * t);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f - e);
         pushed_alpha = true;
-    } else if (a.anim < 1.0f) {
+    } else if (a.anim < 1.0f && !docked) {
         float t = (float)(now_double() - a.anim_t0) / 0.5f;
         if (t >= 1.0f) a.anim = 1.0f;
         else {
@@ -683,7 +711,7 @@ void igui_build_ui(double t, float fps) {
                                                                  : IM_COL32(255, 255, 255, 45),
                             10.0f, 0, hot ? 2.5f : 1.5f);
             }
-            if (i == g_desk_nav_sel && !g_desk_edit)
+            if (i == g_desk_nav_sel && g_desk_nav_on && !g_desk_edit)
                 dl->AddRect(ImVec2(bx - 3, by - 3), ImVec2(bx + cellw - 11, by + cellh - 9),
                             IM_COL32(120, 220, 255, 255), 12.0f, 0, 3.5f);
             if (g_dyn[i].icon)
@@ -723,8 +751,11 @@ void igui_build_ui(double t, float fps) {
         a.open = false;
         if (a.destroy) a.destroy();
         dlclose(a.h);
-        char cmd[128];
-        snprintf(cmd, sizeof cmd, "rm -rf " APPS_DIR "/%s", a.id);
+        /* REVERSIBLE uninstall: move to the local app repo, not rm -rf */
+        char cmd[160];
+        snprintf(cmd, sizeof cmd,
+                 "mkdir -p /home/user/imrun/repo && rm -rf /home/user/imrun/repo/%s && mv "
+                 APPS_DIR "/%s /home/user/imrun/repo/%s", a.id, a.id, a.id);
         system(cmd);
         for (int k = di; k < g_dyn_n - 1; k++) g_dyn[k] = g_dyn[k + 1];
         g_dyn_n--;
