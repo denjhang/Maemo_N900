@@ -34,6 +34,9 @@ typedef struct {
 
 static IGlfns gl;
 static ImFont *g_fonts[4];
+static ImFont *g_cnfont;
+static ImFont *g_worldfont;
+static ImFont *g_krfont;
 static const char *g_fontnames[4] = {"MSYH", "MSYH", "MSYH", "BITMAP"};
 static const float g_sizes[4] = {20.0f, 20.0f, 20.0f, 22.0f};
 static int g_fontsel = 1;
@@ -122,6 +125,30 @@ int igui_init(int w, int h, IGlfns *fns) {
         bcfg.PixelSnapH = true;
         g_fonts[3] = io.Fonts->AddFontDefault(&bcfg);
     }
+    {
+        /* dynamic path bakes glyphs on demand: cjk/cyrillic ranges are fine */
+        ImFontConfig ccfg;
+        ccfg.SizePixels = 20.0f;
+        ccfg.PixelSnapH = true;
+        g_cnfont = io.Fonts->AddFontFromFileTTF("/home/user/fonts/msyh.ttc",
+                                                20.0f, &ccfg,
+                                                io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+        /* WORLD font: latin+accents, cyrillic, kana, han — one face */
+        static ImWchar wranges[] = { 0x20, 0xFF, 0x400, 0x52F, 0x3040, 0x30FF,
+                                     0x4E00, 0x9FFF, 0 };
+        ImFontConfig wcfg;
+        wcfg.SizePixels = 20.0f;
+        wcfg.PixelSnapH = true;
+        g_worldfont = io.Fonts->AddFontFromFileTTF("/home/user/fonts/msyh.ttc",
+                                                   20.0f, &wcfg, wranges);
+        /* Korean hangul: msyh has none, malgun does */
+        ImFontConfig kcfg;
+        kcfg.SizePixels = 20.0f;
+        kcfg.PixelSnapH = true;
+        g_krfont = io.Fonts->AddFontFromFileTTF("/home/user/fonts/malgun.ttf",
+                                                20.0f, &kcfg,
+                                                io.Fonts->GetGlyphRangesKorean());
+    }
     g_fontsel = 1;
     io.FontDefault = g_fonts[1] ? g_fonts[1] : io.Fonts->Fonts[0];
     ImGui::GetStyle().FontSizeBase = g_sizes[1];
@@ -135,6 +162,10 @@ void igui_newframe(float dt) {
     // RendererHasTextures backend: glyphs bake on demand at the requested
     // size; texture uploads happen in igui_render from PlatformIO().Textures.
     ImGui::NewFrame();
+}
+
+void igui_key_char(const char *utf8) {
+    ImGui::GetIO().AddInputCharactersUTF8(utf8);
 }
 
 void igui_mouse_pos(float x, float y) {
@@ -204,6 +235,14 @@ void igui_render(void) {
 }
 
 // ---------------- demo UI ----------------
+extern "C" {
+extern int audio_on;
+extern char last_key[64];
+extern char hw[8][96];
+extern int hw_n;
+extern void audio_toggle(int on);
+extern void vibra_ping(void);
+}
 static inline ImVec4 vec4f(float x, float y, float z, float w) { return ImVec4(x, y, z, w); }
 #define ImVec2_to_imvec_helper vec4f
 static float g_plot[64];
@@ -334,6 +373,71 @@ void igui_build_ui(double t, float fps) {
             static float col[3] = {0.3f, 0.6f, 1.0f};
             ImGui::ColorEdit3("LED", col, ImGuiColorEditFlags_NoInputs);
             ImGui::PlotLines("LOAD", g_plot, 64, 0, NULL, 0.0f, 1.0f, ImVec2(320, 50));
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::End();
+
+    /* ---- system: hw / audio / vibra / keys / chinese ---- */
+    ImGui::SetNextWindowPos(ImVec2(400, 40), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 260), ImGuiCond_FirstUseEver);
+    ImGui::Begin("SYSTEM");
+    if (ImGui::BeginTabBar("systabs")) {
+        if (ImGui::BeginTabItem("HW")) {
+            for (int i = 0; i < hw_n; i++) ImGui::TextUnformatted(hw[i]);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("AUDIO")) {
+            ImGui::Text("ALSA PCM: %s", audio_on ? "PLAYING 440Hz" : "idle");
+            if (ImGui::Button(audio_on ? "STOP TONE" : "PLAY TONE"))
+                audio_toggle(!audio_on);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("VIBRA")) {
+            ImGui::TextUnformatted("MCE vibrator via dbus (system bus)");
+            if (ImGui::Button("PING VIBRA"))
+                vibra_ping();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("KEYS")) {
+            ImGui::Text("last: %s", last_key[0] ? last_key : "(press slide-out keyboard)");
+            ImGui::TextUnformatted("type into: ");
+            ImGui::SameLine();
+            static char textbuf[64] = "";
+            ImGui::InputText("##kb", textbuf, sizeof textbuf);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("CN")) {
+            if (g_cnfont && ImGui::Button("USE CHINESE FONT"))
+                ImGui::GetIO().FontDefault = g_cnfont;
+            if (g_cnfont) {
+                ImGui::PushFont(g_cnfont);
+                ImGui::Text("诺基亚 N900 复活了");
+                ImGui::Text("SGX530 图形直通，音频直连。");
+                ImGui::Text("中文动态烘焙：按需光栅化。");
+                ImGui::PopFont();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("WORLD")) {
+            if (g_worldfont && ImGui::Button("USE WORLD FONT"))
+                ImGui::GetIO().FontDefault = g_worldfont;
+            ImGui::Text("FR: Bonjour le monde! Ça marche très bien.");
+            ImGui::Text("DE: Grüße aus 2009 — Umlaute: äöü ß.");
+            ImGui::Text("ES: ¡Hola! El niño juega con el pingüino.");
+            ImGui::Text("RU: Привет, мир! Nokia N900 жив.");
+            if (g_worldfont) {
+                ImGui::PushFont(g_worldfont);
+                ImGui::Text("JP: こんにちは世界、日本語も大丈夫。");
+                ImGui::Text("CN: 中文汉字渲染：动态烘焙按需光栅化。");
+                ImGui::PopFont();
+            }
+            if (g_krfont) {
+                ImGui::PushFont(g_krfont);
+                ImGui::Text("KR: 안녕하세요, 말군 고딕입니다.");
+                ImGui::PopFont();
+            }
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

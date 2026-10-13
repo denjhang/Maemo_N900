@@ -58,6 +58,20 @@ static int (*pXSelectInput)(void *, unsigned long, long);
 static int (*pXPending)(void *);
 static int (*pXNextEvent)(void *, void *);
 static int (*pXFlush)(void *);
+static int (*pXLookupString)(void *, char *, int, void **, void *);
+/* ALSA: sound output without any audio framework */
+typedef struct _snd_pcm snd_pcm_t;
+static void *hALSA;
+static int (*snd_pcm_open)(snd_pcm_t **, const char *, int, int);
+static int (*snd_pcm_set_params)(snd_pcm_t *, int, int, unsigned, unsigned, int, unsigned);
+static long (*snd_pcm_writei)(snd_pcm_t *, const void *, unsigned long);
+static int (*snd_pcm_close)(snd_pcm_t *);
+static snd_pcm_t *pcm;
+int audio_on;
+static float audio_phase;
+char last_key[64];
+char hw[8][96];
+int hw_n;
 
 static void *eglD, *eglS, *eglC;
 static unsigned (*peglInitialize)(void *, int *, int *);
@@ -195,6 +209,15 @@ static int load_syms(void) {
     *(void **)(&pXPending) = dlsym(hX11, "XPending");
     *(void **)(&pXNextEvent) = dlsym(hX11, "XNextEvent");
     *(void **)(&pXFlush) = dlsym(hX11, "XFlush");
+    *(void **)(&pXLookupString) = dlsym(hX11, "XLookupString");
+    hALSA = dlopen("libasound.so.2", RTLD_NOW);
+    if (hALSA) {
+        snd_pcm_open = dlsym(hALSA, "snd_pcm_open");
+        snd_pcm_set_params = dlsym(hALSA, "snd_pcm_set_params");
+        snd_pcm_writei = dlsym(hALSA, "snd_pcm_writei");
+        snd_pcm_close = dlsym(hALSA, "snd_pcm_close");
+        printf("ALSA symbols OK\n");
+    } else printf("libasound not found: %s\n", dlerror());
     DLSYM(hX11, pXCreateColormap, "XCreateColormap");
     DLSYM(hX11, pXCreateWindow, "XCreateWindow");
     DLSYM(hEGL, peglInitialize, "eglInitialize");
@@ -304,7 +327,8 @@ static int init_gfx(int w, int h) {
     if (pXSelectInput)
         pXSelectInput(xdpy, win,
                       (1L<<2)/*ButtonPress*/ | (1L<<3)/*ButtonRelease*/ |
-                      (1L<<6)/*PointerMotion*/ | (1L<<15)/*Exposure*/);
+                      (1L<<6)/*PointerMotion*/ | (1L<<15)/*Exposure*/ |
+                      (1L<<0)/*KeyPress*/ | (1L<<1)/*KeyRelease*/);
     int ctxA[] = { EGL_CONTEXT_CLIENT_VERSION, 1, EGL_NONE };
     eglS = peglCreateWindowSurface(eglD, cfg, win, NULL);
     if (!eglS) { printf("eglCreateWindowSurface FAIL err=%x\n", peglGetError()); return 1; }
@@ -343,6 +367,86 @@ typedef struct {
     void (*GetErrorFn)(void);
 } IGlfns;
 extern int igui_init(int w, int h, IGlfns *fns);
+extern void igui_key_char(const char *utf8);
+
+static void hw_sample(void) {
+    hw_n = 0;
+    FILE *f;
+    char line[256];
+    long mt = -1, mf = -1;
+    if ((f = fopen("/proc/meminfo", "r"))) {
+        while (fgets(line, sizeof line, f)) {
+            if (!strncmp(line, "MemTotal:", 9)) sscanf(line + 9, "%ld", &mt);
+            if (!strncmp(line, "MemFree:", 8)) sscanf(line + 8, "%ld", &mf);
+        }
+        fclose(f);
+    }
+    if (mt > 0) snprintf(hw[hw_n++], 96, "MEM: %ld/%ld kB free", mf, mt);
+    long khz = -1;
+    if ((f = fopen("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "r"))) {
+        if (fgets(line, sizeof line, f)) sscanf(line, "%ld", &khz);
+        fclose(f);
+    }
+    if (khz > 0) snprintf(hw[hw_n++], 96, "CPU: %ld MHz", khz / 1000);
+    /* battery: N900 bq27200, several possible node names */
+    const char *batt_paths[] = {
+        "/sys/class/power_supply/bq27200-0/capacity",
+        "/sys/class/power_supply/rx51-battery/capacity",
+        "/sys/class/power_supply/battery/capacity", NULL };
+    for (int i = 0; batt_paths[i]; i++) {
+        if ((f = fopen(batt_paths[i], "r"))) {
+            int cap = -1;
+            if (fgets(line, sizeof line, f)) cap = atoi(line);
+            fclose(f);
+            if (cap >= 0) { snprintf(hw[hw_n++], 96, "BATTERY: %d%%", cap); break; }
+        }
+    }
+    const char *ifaces[] = {"wlan0", "gprs0", "usb0", "lo", NULL};
+    for (int i = 0; ifaces[i]; i++) {
+        char p[128];
+        snprintf(p, sizeof p, "/sys/class/net/%s/operstate", ifaces[i]);
+        if ((f = fopen(p, "r"))) {
+            char st[32] = "?";
+            if (fgets(st, sizeof st, f)) st[strcspn(st, "\r\n")] = 0;
+            fclose(f);
+            snprintf(hw[hw_n++], 96, "NET %s: %s", ifaces[i], st);
+        }
+    }
+    if (hw_n == 0) snprintf(hw[hw_n++], 96, "hw sample failed");
+}
+
+void vibra_ping(void) {
+    int r = system("dbus-send --system --type=method_call --dest=com.nokia.mce "
+                   "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
+                   "pattern_activate string:short 2>&1");
+    (void)r;
+}
+
+void audio_toggle(int on) {
+    if (!snd_pcm_open) return;
+    if (on && !pcm) {
+        if (snd_pcm_open(&pcm, "default", 0 /*PLAYBACK*/, 0) == 0) {
+            /* S16_LE=2, RW_INTERLEAVED=3, 2ch, 44100Hz, 100ms latency */
+            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 100000);
+        } else pcm = NULL;
+    } else if (!on && pcm) {
+        snd_pcm_close(pcm);
+        pcm = NULL;
+    }
+    audio_on = on && pcm != NULL;
+}
+
+static void audio_frame(void) {
+    if (!audio_on || !pcm) return;
+    static short buf[735 * 2];
+    for (int i = 0; i < 735; i++) {
+        short s = (short)(sinf(audio_phase) * 8000);
+        buf[i * 2] = s; buf[i * 2 + 1] = s;
+        audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
+    }
+    snd_pcm_writei(pcm, buf, 735);
+}
+
 extern void igui_newframe(float dt);
 extern void igui_build_ui(double t, float fps);
 extern void igui_render(void);
@@ -432,9 +536,17 @@ int main(void) {
                         igui_mouse_pos((float)ev.x, (float)ev.y);
                         igui_mouse_btn((int)ev.button - 1, ev.type == 4);
                     }
+                } else if (ev.type == 2 /*KeyPress*/ || ev.type == 3 /*KeyRelease*/) {
+                    char kb[16] = {0};
+                    if (pXLookupString)
+                        pXLookupString(&ev, kb, sizeof kb - 1, NULL, NULL);
+                    snprintf(last_key, sizeof last_key, "KEY %u %s '%s'",
+                             (unsigned)ev.button, ev.type == 2 ? "DOWN" : "UP", kb);
+                    if (ev.type == 2 && kb[0]) igui_key_char(kb);
                 }
             }
         }
+        if (frames % 60 == 0) hw_sample();
         double el = (t = now()) - t0;
         float fps = frames / el;
         float dt = (float)(t - last);
@@ -474,6 +586,7 @@ int main(void) {
         pglLoadIdentity();
         igui_newframe(dt);
         igui_build_ui(el, fps);
+        audio_frame();
         igui_render();
         if (!peglSwapBuffers(eglD, eglS))
             printf("SWAP FAIL err=%x frame=%d\n", peglGetError(), frames);
