@@ -241,3 +241,13 @@
 - **HOME 键最小化全部**：原版漏了动态插件（只循环内建）——补上 g_dyn 循环，现在真的"全部"
 - **BACK 键语义重定义**（安卓式）：先收起打开的弹出菜单（下拉框/右键菜单，一次一层，核心导出 ImGui_OpenPopupCount/CloseTopPopup），全部收完后才关闭当前聚焦应用
 - **任务栏长按 0.5s = 关闭应用**（震动反馈；短按仍为聚焦/最小化切换；长按后释放不误触发切换）
+
+## IMRUN v0.3（2026-10-14，六项 UI 体系升级）
+- 二进制 md5: a56e919d0e94ec3da6f27ebc5486adec（/home/user/imrun/imrun）
+- **Dock 停靠/最大化不再覆盖系统栏**：dockspace 宿主窗口固定在 432px 高（系统栏上方）；SYSTEM 设置里"DOCK MAY COVER SYSTEM BAR"可解锁全屏
+- **SYSINFO+WALLPAP 合并为 SYSTEM**（LOOKS/INFO/ABOUT 三页），系统应用精简为 2 个：SYSTEM + APPMGR
+- **桌面纵向卷轴**：图标超出 4x4 一屏后向下延伸，右侧出现触摸可拖的滚动条（配合 v0.27 触摸滚动补丁）
+- **桌面键盘过滤**：桌面态直接打字母 → 顶部弹出过滤框，匹配图标亮边、不匹配变暗，ENTER 打开第一个匹配，BKSP 删字符，ESC 清空
+- **开/关窗口动画**：打开从无到有淡入 0.5s smoothstep，关闭淡出 0.5s 后才真正销毁（destroy 钩子在动画结束时执行，资源类插件晚 0.5s 释放）
+- **版本同步**：IMRUN_VER 宏统一版本号，左下角水印 v0.3；ABOUT 页内嵌完整 CHANGELOG（v0.9~v0.3）
+- 任务栏长按关闭的震动反馈（v0.28 已有）保留

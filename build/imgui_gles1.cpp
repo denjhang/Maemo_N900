@@ -224,8 +224,8 @@ struct DynApp {
     int (*init)(void);                /* optional */
     void (*destroy)(void);            /* optional */
     void (*icon)(void *dl, float cx, float cy, float s); /* optional: vector icon */
-    bool open, mini, ever, cascade;
-    float anim; double anim_t0;
+    bool open, mini, ever, cascade, closing;
+    float anim; double anim_t0; double close_t0;
 };
 static DynApp g_dyn[8];
 static int g_dyn_n = 0;
@@ -265,21 +265,26 @@ static void dyn_scan(void) {
 
 /* ============ IMRUN shell state (declared early: key path uses it) ======= */
 struct ShellApp { const char *name; bool open; bool mini; bool cascade; bool ever;
+                  bool closing; double close_t0;
                   float anim; double anim_t0;   /* open/restore transition */ };
 static ShellApp g_apps[] = {
-    {"SYSINFO", false, false, false, false, 1, 0},   /* system: not uninstallable */
-    {"WALLPAP", false, false, false, false, 1, 0},   /* system */
-    {"APPMGR", false, false, false, false, 1, 0},    /* system */
+    {"SYSTEM", false, false, false, false, false, 0, 1, 0},
+    {"APPMGR", false, false, false, false, false, 0, 1, 0},
 };
 /* desktop edit mode: long-press an icon -> red X badges (uninstall) */
 static bool g_desk_edit = false;
+static char g_desk_filter[32] = ""; /* desktop keyboard app filter */
 static int g_dyn_dead = -1;         /* index pending dlclose+rm at frame start */
 static const int NAPPS = (int)(sizeof g_apps / sizeof g_apps[0]);
 static int g_focus = -1;          /* focused window, -1 = desktop only */
+#define IMRUN_VER "0.3"
 /* adjustable transparency (WALLPAP app): window bg / taskbar / desktop tint */
 float g_a_win = 0.88f, g_a_bar = 0.80f, g_a_desk = 0.0f;
+bool g_dock_covers_sysbar = false;  /* dock/maximize respects the 48px sysbar
+                                       unless enabled in SYSTEM settings */
 bool g_ctrl_down = false;         /* fed by igui_special_key / X keycode 37 */
 static void shell_close(int i);       /* defined below */
+static void shell_focus(int i);
 static void shell_minimize(int i);
 /* patched-ImGui native minimize hook: window title "NAME###appN" -> N */
 void imrun_minimize_by_title(const char *title);
@@ -287,6 +292,17 @@ extern "C" void imrun_audio_stop_all(void); /* gldemo side: TONEGEN cleanup */
 void igui_ctrl_combo(char c);         /* from X11 pump: ctrl+letter combos */
 
 void igui_key_char(const char *utf8) {
+    /* desktop focus + typing = app filter (like a launcher search) */
+    if (g_focus < 0 && utf8 && utf8[0] >= 0x20 && !utf8[1] &&
+        strlen(g_desk_filter) + 1 < sizeof g_desk_filter) {
+        char c = utf8[0];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            size_t l = strlen(g_desk_filter);
+            g_desk_filter[l] = c;
+            g_desk_filter[l + 1] = 0;
+            return;
+        }
+    }
     /* plain Ctrl+W/M arrives here as control bytes 0x17/0x0d - the printable
        filter in the pump drops them, combos go through igui_ctrl_combo */
     ImGui::GetIO().AddInputCharactersUTF8(utf8);
@@ -298,6 +314,41 @@ void igui_key_char(const char *utf8) {
    XKB composes Fn+key into the charsym - so only modifiers need wiring. */
 void igui_special_key(unsigned ks, int down) {
     ImGuiIO &io = ImGui::GetIO();
+    /* desktop filter control: BKSP=del, ENTER=open first match, ESC=clear */
+    if (down && g_focus < 0 && g_desk_filter[0]) {
+        if (ks == 0xff08) { /* BackSpace */
+            size_t l = strlen(g_desk_filter);
+            if (l) g_desk_filter[l - 1] = 0;
+            return;
+        }
+        if (ks == 0xff0d || ks == 0xff0a) { /* Return: open first match */
+            char uf[32];
+            snprintf(uf, sizeof uf, "%s", g_desk_filter);
+            for (char *q = uf; *q; q++) *q = (*q >= 'a' && *q <= 'z') ? *q - 32 : *q;
+            for (int i = 0; i < NAPPS + g_dyn_n; i++) {
+                const char *nm = i < NAPPS ? g_apps[i].name : g_dyn[i - NAPPS].name;
+                char ub[40];
+                snprintf(ub, sizeof ub, "%s", nm);
+                for (char *q = ub; *q; q++) *q = (*q >= 'a' && *q <= 'z') ? *q - 32 : *q;
+                if (strstr(ub, uf)) {
+                    if (i < NAPPS) shell_focus(i);
+                    else {
+                        DynApp &da = g_dyn[i - NAPPS];
+                        if (!da.ever) { da.cascade = true; da.ever = true; }
+                        da.open = true; da.mini = false;
+                        da.anim = 0; da.anim_t0 = now_double();
+                    }
+                    break;
+                }
+            }
+            g_desk_filter[0] = 0;
+            return;
+        }
+        if (ks == 0xff1b) { /* Escape */
+            g_desk_filter[0] = 0;
+            return;
+        }
+    }
     ImGuiKey k = ImGuiKey_None;
     switch (ks) {
     case 0xff08: k = ImGuiKey_Backspace; break;        /* BackSpace */
@@ -415,11 +466,11 @@ static float hue = 0.4f;
    (Today the apps are in-process; when .imapp dlopen lands, this is where
    destroy()+dlclose goes. Same rule, bigger hammer.) */
 static void shell_app_destroy(int i);
-static void shell_close(int i) {
-    g_apps[i].open = false;
-    g_apps[i].mini = false;
+static void shell_close(int i) {   /* starts the fade-OUT, finalize at 0 */
+    ShellApp &a = g_apps[i];
+    if (!a.open) return;
+    if (!a.closing) { a.closing = true; a.close_t0 = now_double(); }
     if (g_focus == i) g_focus = -1;
-    shell_app_destroy(i);
 }
 static void shell_minimize(int i) {
     g_apps[i].mini = true;
@@ -458,6 +509,7 @@ static int g_cascade_seq = 0;         /* new windows stack from top-left */
 static bool g_uncollapse[16];  /* explicit open always un-collapses (stale
                                     ini Collapsed=1 made apps look dead) */
 static void shell_focus(int i) {
+    g_desk_filter[0] = 0;   /* any open action dismisses the filter */
     ShellApp &a = g_apps[i];
     if (i >= 0 && i < 16) g_uncollapse[i] = true;
     if (!a.ever) {                    /* cascade ONLY on first-ever open:
@@ -494,7 +546,7 @@ static void shell_read_sysfs(void) {
 static ImVec2 CalcTextSizeLocal(ImFont *f, float fs, const char *s);
 static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     ShellApp &a = g_apps[i];
-    if (!a.open || a.mini) return false;
+    if ((!a.open && !a.closing) || a.mini) return false;
     bool pushed_alpha = false;
     if (a.cascade) {
         /* fresh open: cascade from top-left, never tiny (Windows style) */
@@ -506,17 +558,28 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
         if (cp.y + cs.y > 424) cp.y = 424 - cs.y;
         ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
         ImGui::SetNextWindowSize(cs, ImGuiCond_Always);
+    } else if (a.closing) {
+        /* fade-OUT close: keep rendering until gone, then finalize */
+        float t = (float)(now_double() - a.close_t0) / 0.5f;
+        if (t >= 1.0f) {
+            a.open = false; a.closing = false; a.mini = false;
+            shell_app_destroy(i);
+            return false;
+        }
+        float e = t * t * (3 - 2 * t);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f - e);
+        pushed_alpha = true;
     } else if (a.anim < 1.0f) {
         /* reopen/restore: ALPHA FADE ONLY. Never force pos/size here -
            SetNextWindowPos during the animation stomps the layout the user
            saved in imrun.ini (that was the bottom-left-reappear bug) */
-        float t = (float)(now_double() - a.anim_t0) / 0.22f;
+        float t = (float)(now_double() - a.anim_t0) / 0.5f;
         if (t >= 1.0f) {
             a.anim = 1.0f;
         } else {
             a.anim = t;
-            float e = t * t * (3 - 2 * t); /* smoothstep */
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.2f + 0.8f * e);
+            float e = t * t * (3 - 2 * t); /* smoothstep: born from nothing */
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, e);
             pushed_alpha = true;
         }
     }
@@ -534,9 +597,13 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImVec4(0.09f, 0.11f, 0.16f, g_a_win));
     /* NATIVE title bar + native docking, untouched. p_open gives the X. */
-    bool shown = ImGui::Begin(title, &a.open);
+    bool p_keep = a.open && !a.closing;
+    bool shown = ImGui::Begin(title, &p_keep);
+    if (!p_keep && !a.closing) { /* X pressed: fade out, don't vanish */
+        a.open = true; a.closing = true; a.close_t0 = now_double();
+    }
     if (pushed_alpha) ImGui::PopStyleVar();
-    if (!shown) { ImGui::End(); ImGui::PopStyleColor(); shell_close(i); return false; }
+    if (!shown) { ImGui::End(); ImGui::PopStyleColor(); if (!a.closing) shell_close(i); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
     /* minimize button inside the NATIVE title bar, left of the X */
     {
@@ -634,9 +701,25 @@ void igui_build_ui(double t, float fps) {
             shell_focus(0); shell_focus(2); shell_focus(3);
         }
     }
-    // full-screen dockspace: drag windows to screen edges to dock
-    ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
-                                 ImGuiDockNodeFlags_PassthruCentralNode);
+    /* dockspace host: fills the area ABOVE the 48px system bar so docked/
+       maximized windows never cover it (toggle in SYSTEM settings) */
+    {
+        float dh = g_dock_covers_sysbar ? 480.0f : 432.0f;
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(800, dh));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("###dockhost", NULL,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::DockSpace(ImGui::GetID("DockSpace"), ImVec2(0, 0),
+                         ImGuiDockNodeFlags_PassthruCentralNode);
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+    }
     shell_read_sysfs();
     if (++g_dyn_scan_cnt >= 120) { g_dyn_scan_cnt = 0; dyn_scan(); }
 
@@ -650,9 +733,25 @@ void igui_build_ui(double t, float fps) {
                           ImVec4(0.03f, 0.05f, 0.09f, g_a_desk));
     ImGui::Begin("###desktop", NULL,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoMove | /* scrollbar allowed: vertical
+                    scrolling desktop when apps exceed one screen */
                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
                  ImGuiWindowFlags_NoNav);
+    /* desktop keyboard filter: type letters while on desktop to find apps */
+    if (g_desk_filter[0]) {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        float fw = 240;
+        dl->AddRectFilled(ImVec2(280, 6), ImVec2(280 + fw, 44),
+                          IM_COL32(20, 26, 38, 235), 8.0f);
+        dl->AddRect(ImVec2(280, 6), ImVec2(280 + fw, 44),
+                    IM_COL32(90, 200, 240, 200), 8.0f, 0, 2.0f);
+        char fl[72];
+        snprintf(fl, sizeof fl, "> %s", g_desk_filter);
+        dl->AddText(ImVec2(294, 6 + (38 - ImGui::GetFontSize()) * 0.5f),
+                    IM_COL32(235, 240, 245, 255), fl);
+        dl->AddText(ImVec2(280 + fw - 88, 6 + (38 - ImGui::GetFontSize()) * 0.5f),
+                    IM_COL32(150, 160, 175, 200), "ENTER=open");
+    }
     {
         ImDrawList *dl = ImGui::GetWindowDrawList();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -698,15 +797,30 @@ void igui_build_ui(double t, float fps) {
                 }
             } else hold_t0[hi] = 0;
             bool hot = ImGui::IsItemHovered();
+            bool fmatch = true;
+            if (g_desk_filter[0] && nm) {
+                char ub[40], uf[40];
+                snprintf(ub, sizeof ub, "%s", nm);
+                for (char *q = ub; *q; q++) *q = (*q >= 'a' && *q <= 'z') ? *q - 32 : *q;
+                snprintf(uf, sizeof uf, "%s", g_desk_filter);
+                for (char *q = uf; *q; q++) *q = (*q >= 'a' && *q <= 'z') ? *q - 32 : *q;
+                fmatch = strstr(ub, uf) != NULL;
+            }
             /* tile: frosted card behind the icon */
             ImVec2 p0 = ImVec2(bx, by), p1 = ImVec2(bx + cellw - 14, by + cellh - 12);
-            dl->AddRectFilled(p0, p1,
-                              IM_COL32(on ? 40 : 255, on ? 90 : 255, on ? 130 : 255,
-                                       hot ? 66 : 38),
-                              10.0f);
-            dl->AddRect(p0, p1,
-                        on ? IM_COL32(90, 200, 240, 220) : IM_COL32(255, 255, 255, 45),
-                        10.0f, 0, hot ? 2.5f : 1.5f);
+            if (g_desk_filter[0] && !fmatch) {
+                dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 60), 10.0f);
+                dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 18), 10.0f, 0, 1.0f);
+            } else {
+                dl->AddRectFilled(p0, p1,
+                                  IM_COL32(on ? 40 : 255, on ? 90 : 255, on ? 130 : 255,
+                                           hot ? 66 : 38),
+                                  10.0f);
+                dl->AddRect(p0, p1,
+                            (on || (g_desk_filter[0] && fmatch)) ? IM_COL32(90, 200, 240, 240)
+                                                                 : IM_COL32(255, 255, 255, 45),
+                            10.0f, 0, hot ? 2.5f : 1.5f);
+            }
             if (dyn && g_dyn[di].icon)
                 g_dyn[di].icon(ImGui::GetWindowDrawList(),
                                bx + (cellw - 14) * 0.5f, by + 34, 17.0f);
@@ -744,7 +858,7 @@ void igui_build_ui(double t, float fps) {
         ImGui::TextColored(vec4f(0.9f, 0.5f, 0.4f, 0.9f), "EDIT MODE: tap red X to uninstall");
     } else {
         ImGui::SetCursorPos(ImVec2(10, 404));
-        ImGui::TextColored(vec4f(0.55f, 0.62f, 0.72f, 0.85f), "IMRUN shell v0.1 - imgui %s  (long-press icon to edit)",
+        ImGui::TextColored(vec4f(0.55f, 0.62f, 0.72f, 0.85f), "IMRUN v" IMRUN_VER " - imgui %s  (type to filter, long-press to edit)",
                            ImGui::GetVersion());
     }
     /* process pending uninstall at safe point (never mid-frame) */
@@ -851,8 +965,9 @@ void igui_build_ui(double t, float fps) {
                 else if (chip_t0[ci] > 0 && ImGui::GetTime() - chip_t0[ci] > 0.5f) {
                     chip_t0[ci] = -1;   /* stays until release consumes it */
                     vibra_ping(80);
-                    if (dyn) g_dyn[di].open = false;
-                    else shell_close(i);
+                    if (dyn && g_dyn[di].open && !g_dyn[di].closing) {
+                        g_dyn[di].closing = true; g_dyn[di].close_t0 = now_double();
+                    } else if (!dyn) shell_close(i);
                 }
             } else if (chip_t0[ci] > 0) {
                 chip_t0[ci] = 0;
@@ -918,52 +1033,72 @@ void igui_build_ui(double t, float fps) {
 
     /* ================= apps (each opened on demand) ================= */
 
-    /* APP: SYSINFO - hardware + version */
-    if (shell_begin_app(0, ImVec2(300, 120), ImVec2(380, 260))) {
-        for (int i = 0; i < hw_n; i++) ImGui::TextUnformatted(hw[i]);
-        ImGui::Separator();
-        ImGui::Text("Nokia N900 - 2009 - Cortex A8 + SGX530");
-        ImGui::Text("imgui %s", ImGui::GetVersion());
-        if (ImGui::BeginTable("hw", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn("COMPONENT");
-            ImGui::TableSetupColumn("VALUE");
-            ImGui::TableHeadersRow();
-            const char *rows[6][2] = {
-                {"CPU", "Cortex-A8 600MHz"}, {"GPU", "PowerVR SGX530"},
-                {"RAM", "256MB LPDDR"}, {"SCREEN", "800x480 AMOLED"},
-                {"GLES", "1.1 fixed-func"}, {"COMPOSITOR", "DISABLED"}};
-            for (int i = 0; i < 6; i++) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(rows[i][0]);
-                ImGui::TableSetColumnIndex(1);
-                ImGui::TextUnformatted(rows[i][1]);
-            }
-            ImGui::EndTable();
+    /* APP: SYSTEM - merged settings (LOOKS) + info (INFO) + about (ABOUT) */
+    if (shell_begin_app(0, ImVec2(280, 60), ImVec2(460, 360))) {
+        if (ImGui::BeginTabBar("systabs")) {
+        if (ImGui::BeginTabItem("LOOKS")) {
+            const char *modes[4] = {"3D DYNAMIC", "3D STATIC", "2D DYNAMIC", "2D STATIC"};
+            int m = g_wall_mode;
+            if (ImGui::Combo("MODE", &m, modes, 4)) g_wall_mode = m;
+            const char *pals[4] = {"AZURE", "VIOLET", "EMERALD", "AMBER"};
+            int v = g_wall_variant;
+            if (ImGui::Combo("PALETTE", &v, pals, 4)) g_wall_variant = v;
+            ImGui::Separator();
+            ImGui::TextUnformatted("TRANSPARENCY");
+            ImGui::SliderFloat("WINDOW", &g_a_win, 0.4f, 1.0f, "%.2f");
+            ImGui::SliderFloat("TASKBAR", &g_a_bar, 0.3f, 1.0f, "%.2f");
+            ImGui::SliderFloat("DESK TINT", &g_a_desk, 0.0f, 0.8f, "%.2f");
+            ImGui::Separator();
+            ImGui::Checkbox("DOCK MAY COVER SYSTEM BAR", &g_dock_covers_sysbar);
+            ImGui::TextUnformatted("(off: docked/maximized windows stop above the bar)");
+            ImGui::EndTabItem();
         }
-
-        shell_end_app();
-    }
-    /* APP: WALLPAP - wallpaper engine + transparency controls */
-    if (shell_begin_app(1, ImVec2(360, 160), ImVec2(420, 300))) {
-        const char *modes[4] = {"3D DYNAMIC", "3D STATIC", "2D DYNAMIC", "2D STATIC"};
-        int m = g_wall_mode;
-        if (ImGui::Combo("MODE", &m, modes, 4)) g_wall_mode = m;
-        const char *pals[4] = {"AZURE", "VIOLET", "EMERALD", "AMBER"};
-        int v = g_wall_variant;
-        if (ImGui::Combo("PALETTE", &v, pals, 4)) g_wall_variant = v;
-        ImGui::Separator();
-        ImGui::TextUnformatted("TRANSPARENCY");
-        ImGui::SliderFloat("WINDOW", &g_a_win, 0.4f, 1.0f, "%.2f");
-        ImGui::SliderFloat("TASKBAR", &g_a_bar, 0.3f, 1.0f, "%.2f");
-        ImGui::SliderFloat("DESK TINT", &g_a_desk, 0.0f, 0.8f, "%.2f");
-        ImGui::TextUnformatted("drop app.so into /home/user/imrun/apps/<id>/ - "
-                               "picked up live, no restart");
+        if (ImGui::BeginTabItem("INFO")) {
+            for (int i = 0; i < hw_n; i++) ImGui::TextUnformatted(hw[i]);
+            ImGui::Separator();
+            ImGui::Text("Nokia N900 - 2009 - Cortex A8 + SGX530");
+            ImGui::Text("imgui %s", ImGui::GetVersion());
+            if (ImGui::BeginTable("hw", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("COMPONENT");
+                ImGui::TableSetupColumn("VALUE");
+                ImGui::TableHeadersRow();
+                const char *rows[6][2] = {
+                    {"CPU", "Cortex-A8 600MHz"}, {"GPU", "PowerVR SGX530"},
+                    {"RAM", "256MB LPDDR"}, {"SCREEN", "800x480 AMOLED"},
+                    {"GLES", "1.1 fixed-func"}, {"COMPOSITOR", "DISABLED"}};
+                for (int i = 0; i < 6; i++) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(rows[i][0]);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(rows[i][1]);
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("ABOUT")) {
+            ImGui::Text("IMRUN v" IMRUN_VER);
+            ImGui::TextUnformatted("hot-loadable ImGui runtime - bare X11+EGL+GLES1.1");
+            ImGui::Separator();
+            ImGui::TextUnformatted("CHANGELOG");
+            ImGui::BulletText("v0.3 system apps merged (SYSTEM+APPMGR), dock respects "
+                              "sysbar, scrolling desktop, keyboard app filter, version sync");
+            ImGui::BulletText("v0.28 BACK=popup collapse then close; taskbar long-press kill; "
+                              "auto-uncollapse on open; HOME minimizes all");
+            ImGui::BulletText("v0.27 touch drag scrolling (core patch 3); plugin icon standard");
+            ImGui::BulletText("v0.26 full modularization - only system apps builtin");
+            ImGui::BulletText("v0.24/25 true hot reload, APPMGR, long-press uninstall");
+            ImGui::BulletText("v0.9-v0.23 audio saga, shell, native minimize (core patches 1-2)");
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+        }
         shell_end_app();
     }
 
     /* APP: APPMGR - install (filtered list) / manage / stats */
-    if (shell_begin_app(2, ImVec2(60, 40), ImVec2(440, 340))) {
+    if (shell_begin_app(1, ImVec2(60, 40), ImVec2(440, 340))) {
         static char filter[40] = "";
         if (ImGui::BeginTabBar("mgr")) {
         if (ImGui::BeginTabItem("INSTALL")) {
@@ -1034,9 +1169,18 @@ void igui_build_ui(double t, float fps) {
     /* ---- dynamic hot-loaded app windows (app.so from apps dir) ---- */
     for (int di = 0; di < g_dyn_n; di++) {
         DynApp &a = g_dyn[di];
-        if (!a.open || a.mini) continue;
+        if ((!a.open && !a.closing) || a.mini) continue;
         bool pushed_alpha = false;
-        if (a.cascade) {
+        if (a.closing) {
+            float t = (float)(now_double() - a.close_t0) / 0.5f;
+            if (t >= 1.0f) {
+                a.open = false; a.closing = false; a.mini = false;
+                if (a.destroy) a.destroy();
+                continue;
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f - (t * t * (3 - 2 * t)));
+            pushed_alpha = true;
+        } else if (a.cascade) {
             a.cascade = false;
             int n = g_cascade_seq++ % 6;
             ImVec2 cp = ImVec2(24 + n * 42, 20 + n * 34);
@@ -1045,12 +1189,12 @@ void igui_build_ui(double t, float fps) {
             ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(420, 300), ImGuiCond_Always);
         } else if (a.anim < 1.0f) {
-            float tt = (float)(now_double() - a.anim_t0) / 0.22f;
+            float tt = (float)(now_double() - a.anim_t0) / 0.5f;
             if (tt >= 1.0f) a.anim = 1.0f;
             else {
                 a.anim = tt;
                 float e = tt * tt * (3 - 2 * tt);
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.2f + 0.8f * e);
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, e);
                 pushed_alpha = true;
             }
         }
@@ -1065,7 +1209,9 @@ void igui_build_ui(double t, float fps) {
         }
         ImGui::End();
         ImGui::PopStyleColor();
-        if (!a.open) { if (a.destroy) a.destroy(); a.mini = false; }
+        if (!a.open && !a.closing) { /* title-bar X: fade, then destroy */
+            a.open = true; a.closing = true; a.close_t0 = now_double();
+        }
     }
 }
 
