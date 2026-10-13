@@ -100,6 +100,7 @@ int igui_init(int w, int h, IGlfns *fns) {
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; /* dynamic font sizes */
     io.MouseDragThreshold = 3.0f; /* touch: 6px default eats finger gestures */
     io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = "/home/user/imrun.ini"; /* window pos/size persist forever */
     ImGui::StyleColorsDark();
     {
         /* shell polish: rounded, soft; resistive-friendly paddings */
@@ -199,13 +200,13 @@ void ui_stress_toggle(void) {
 }
 
 /* ============ IMRUN shell state (declared early: key path uses it) ======= */
-struct ShellApp { const char *name; bool open; bool mini;
+struct ShellApp { const char *name; bool open; bool mini; bool cascade; bool ever;
                   float anim; double anim_t0;   /* open/restore transition */ };
 static ShellApp g_apps[] = {
-    {"IMGUI", false, false, 1, 0}, {"WIDGETS", false, false, 1, 0},
-    {"TONEGEN", false, false, 1, 0}, {"VIBRA", false, false, 1, 0},
-    {"KEYS", false, false, 1, 0}, {"FONTS", false, false, 1, 0},
-    {"SYSINFO", false, false, 1, 0},
+    {"IMGUI", false, false, false, false, 1, 0}, {"WIDGETS", false, false, false, false, 1, 0},
+    {"TONEGEN", false, false, false, false, 1, 0}, {"VIBRA", false, false, false, false, 1, 0},
+    {"KEYS", false, false, false, false, 1, 0}, {"FONTS", false, false, false, false, 1, 0},
+    {"SYSINFO", false, false, false, false, 1, 0},
 };
 static const int NAPPS = (int)(sizeof g_apps / sizeof g_apps[0]);
 static int g_focus = -1;          /* focused window, -1 = desktop only */
@@ -351,8 +352,18 @@ static void shell_minimize_all(void) {
     for (int i = 0; i < NAPPS; i++) g_apps[i].mini = true;
     g_focus = -1;
 }
-static void shell_focus(int i) { g_focus = i; g_apps[i].open = true; g_apps[i].mini = false;
-                                 g_apps[i].anim = 0; g_apps[i].anim_t0 = now_double(); }
+static int g_cascade_seq = 0;         /* new windows stack from top-left */
+static void shell_focus(int i) {
+    ShellApp &a = g_apps[i];
+    if (!a.ever) {                    /* cascade ONLY on first-ever open:
+                                       afterwards imgui.ini restores the
+                                       user's saved pos/size verbatim */
+        a.cascade = true;
+        a.ever = true;
+    }
+    a.open = true; a.mini = false;
+    a.anim = 0; a.anim_t0 = now_double();
+}
 /* ctrl+letter combos (X11 pump path; N900 ctrl = X keycode 37) */
 void igui_ctrl_combo(char c) {
     if (c == 'w' || c == 'W') { if (g_focus >= 0) shell_close(g_focus); }
@@ -379,7 +390,17 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     ShellApp &a = g_apps[i];
     if (!a.open || a.mini) return false;
     bool pushed_alpha = false;
-    if (a.anim < 1.0f) {
+    if (a.cascade) {
+        /* fresh open: cascade from top-left, never tiny (Windows style) */
+        int n = g_cascade_seq++ % 6;
+        a.cascade = false;
+        ImVec2 cp = ImVec2(24 + n * 42, 20 + n * 34);
+        ImVec2 cs = ImVec2(size.x < 400 ? 400 : size.x, size.y < 280 ? 280 : size.y);
+        if (cp.x + cs.x > 790) cp.x = 790 - cs.x;
+        if (cp.y + cs.y > 424) cp.y = 424 - cs.y;
+        ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(cs, ImGuiCond_Always);
+    } else if (a.anim < 1.0f) {
         float t = (float)(now_double() - a.anim_t0) / 0.22f;
         if (t >= 1.0f) {
             a.anim = 1.0f;
@@ -400,7 +421,7 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
             pushed_alpha = true;
         }
     }
-    if (!pushed_alpha) {
+    if (!pushed_alpha && !a.cascade) {
         ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
     }
@@ -410,16 +431,24 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     if (pushed_alpha) ImGui::PopStyleVar();
     if (!shown) { ImGui::End(); shell_close(i); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
+    /* minimize button in the TITLE BAR, left of the X (Windows logic) */
+    {
+        ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+        float th = ImGui::GetFrameHeight();
+        ImVec2 keep = ImGui::GetCursorPos();
+        ImGui::SetCursorScreenPos(ImVec2(wp.x + ws.x - th * 2 - 4, wp.y + 2));
+        ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.25f, 0.35f, 0.48f, 0.9f));
+        if (ImGui::Button("_###min", ImVec2(th - 4, th - 4)))
+            shell_minimize(i);
+        ImGui::PopStyleColor();
+        ImGui::SetCursorPos(keep);
+    }
     return true;
 }
 static void shell_end_app(void) { ImGui::End(); }
 
-/* window footer: MINIMIZE + CLOSE, touch-sized */
+/* window footer: touch-sized CLOSE (minimize lives in the title bar) */
 static void shell_window_buttons(int i) {
-    float w = ImGui::GetContentRegionAvail().x;
-    if (ImGui::Button("MINIMIZE (Ctrl+M)", ImVec2(w * 0.48f, 44)))
-        shell_minimize(i);
-    ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.55f, 0.15f, 0.15f, 1));
     if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44)))
         shell_close(i);
@@ -599,28 +628,40 @@ void igui_build_ui(double t, float fps) {
     {
         ImDrawList *dl = ImGui::GetWindowDrawList();
         ImU32 line = IM_COL32(235, 240, 245, 255);
-        /* BACK: left chevron on a 48x48 button (press = strong highlight) */
+        /* BACK/HOME: Android-style tap feedback - an elliptical flash that
+           lights up on press and fades out over ~0.5s. No persistent state. */
+        static float g_back_hl = 0, g_home_hl = 0;
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.18f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.30f, 0.62f, 0.85f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-        if (ImGui::InvisibleButton("##back", ImVec2(48, 42))) /* BACK = Ctrl+W */
+        if (ImGui::InvisibleButton("##back", ImVec2(48, 42))) { /* Ctrl+W */
+            g_back_hl = 1.0f;
             igui_close_focused();
+        }
         {
-            ImVec2 c = ImGui::GetItemRectMin();
-            float y = c.y + 21;
-            dl->AddTriangleFilled(ImVec2(c.x + 30, y - 13), ImVec2(c.x + 30, y + 13),
-                                  ImVec2(c.x + 15, y), line);
+            ImVec2 c0 = ImGui::GetItemRectMin();
+            ImVec2 c = ImVec2(c0.x + 24, c0.y + 21);
+            if (g_back_hl > 0)
+                dl->AddEllipseFilled(c, ImVec2(24, 17),
+                                     IM_COL32(120, 200, 255, (int)(150 * g_back_hl)), 24);
+            dl->AddTriangleFilled(ImVec2(c.x + 6, c.y - 12), ImVec2(c.x + 6, c.y + 12),
+                                  ImVec2(c.x - 8, c.y), line);
         }
         ImGui::SameLine();
-        /* HOME: circle ring; click = minimize all (Android-home semantics) */
         if (ImGui::InvisibleButton("##home", ImVec2(48, 42)))
-            shell_minimize_all();
+            { g_home_hl = 1.0f; shell_minimize_all(); }
         {
-            ImVec2 mn = ImGui::GetItemRectMin();
-            dl->AddCircle(ImVec2(mn.x + 24, mn.y + 21), 13.0f,
-                          g_focus < 0 ? IM_COL32(90, 200, 240, 255) : line, 40, 3.0f);
+            ImVec2 c0 = ImGui::GetItemRectMin();
+            ImVec2 c = ImVec2(c0.x + 24, c0.y + 21);
+            if (g_home_hl > 0)
+                dl->AddEllipseFilled(c, ImVec2(24, 17),
+                                     IM_COL32(120, 200, 255, (int)(150 * g_home_hl)), 24);
+            dl->AddCircle(c, 12.0f, line, 40, 3.0f);
         }
+        /* fade-out: ~24 frames to full decay at 60fps (~0.4s) */
+        g_back_hl *= 0.92f; if (g_back_hl < 0.02f) g_back_hl = 0;
+        g_home_hl *= 0.92f; if (g_home_hl < 0.02f) g_home_hl = 0;
         ImGui::SameLine();
         /* running apps: name chip + red X */
         for (int i = 0; i < NAPPS; i++) {
@@ -661,7 +702,7 @@ void igui_build_ui(double t, float fps) {
         float fs = ImGui::GetFontSize();
         /* temperature: thermometer icon + value + C */
         {
-            float x = 800 - 348;
+            float x = 566;
             float yc = wy + 21;
             dl->AddCircleFilled(ImVec2(x, yc + 9), 4.0f, IM_COL32(235, 90, 80, 255));
             dl->AddLine(ImVec2(x, yc + 9), ImVec2(x, yc - 8), IM_COL32(235, 90, 80, 255), 4.0f);
@@ -672,7 +713,7 @@ void igui_build_ui(double t, float fps) {
         }
         /* battery: outline + fill by pct + nub + value% */
         {
-            float x = 800 - 232;
+            float x = 648;
             float yc = wy + 21;
             dl->AddRect(ImVec2(x, yc - 7), ImVec2(x + 30, yc + 9), line, 3.0f, 0, 2.0f);
             dl->AddRectFilled(ImVec2(x + 30, yc - 3), ImVec2(x + 34, yc + 5), line, 1.0f);
@@ -686,17 +727,17 @@ void igui_build_ui(double t, float fps) {
             char btxt[12];
             snprintf(btxt, sizeof btxt, "%s%%", bat);
             ImVec2 ts = CalcTextSizeLocal(f, fs, btxt);
-            dl->AddText(ImVec2(x + 42, ytxt), line, btxt);
+            dl->AddText(ImVec2(x + 40, ytxt), line, btxt);
         }
-        /* clock: watch icon + HH:MM */
+        /* clock: watch icon + HH:MM (flush right, 8px margin) */
         {
-            float x = 800 - 118;
+            ImVec2 ts = CalcTextSizeLocal(f, fs, clk);
+            float x = 792 - ts.x - 16;
             float yc = wy + 21;
             dl->AddCircle(ImVec2(x, yc), 9.0f, line, 32, 2.0f);
             dl->AddLine(ImVec2(x, yc), ImVec2(x, yc - 6), line, 2.0f);
             dl->AddLine(ImVec2(x, yc), ImVec2(x + 4.5f, yc + 2), line, 2.0f);
-            ImVec2 ts = CalcTextSizeLocal(f, fs, clk);
-            dl->AddText(ImVec2(x + 14 + (54 - ts.x) * 0.5f, ytxt), line, clk);
+            dl->AddText(ImVec2(x + 14, ytxt), line, clk);
         }
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);

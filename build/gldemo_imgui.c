@@ -763,18 +763,27 @@ static void *audio_ctl(void *arg) {
 static unsigned long audio_ctl_tid;
 
 /* battery % via HAL/BME (bq27200 is owned by bme daemon, no sysfs exposed).
-   popen(hal-get-property) forks - runs in its own thread, 30s cadence */
+   NOTE: HAL's battery.charge_level.percentage property is STALE (stuck at 76
+   on device) - compute from charge bars current/design instead, those move.
+   popen forks - runs in own thread, 30s cadence */
 int g_batt_pct = -1;
+static int hal_int(const char *key) {
+    char cmd[160], b[32] = {0};
+    snprintf(cmd, sizeof cmd, "hal-get-property --udi /org/freedesktop/Hal/devices/bme "
+                              "--key %s 2>/dev/null", key);
+    FILE *p = popen(cmd, "r");
+    if (!p) return -1;
+    int v = -1;
+    if (fgets(b, sizeof b, p)) v = atoi(b);
+    pclose(p);
+    return v;
+}
 static void *batt_reader(void *arg) {
     (void)arg;
     while (1) {
-        FILE *p = popen("hal-get-property --udi /org/freedesktop/Hal/devices/bme "
-                        "--key battery.charge_level.percentage 2>/dev/null", "r");
-        if (p) {
-            char b[32] = {0};
-            if (fgets(b, sizeof b, p)) g_batt_pct = atoi(b);
-            pclose(p);
-        }
+        int cur = hal_int("battery.charge_level.current");
+        int des = hal_int("battery.charge_level.design");
+        if (cur >= 0 && des > 0) g_batt_pct = cur * 100 / des;
         if (usleep_fn) usleep_fn(30000000);
     }
     return NULL;
