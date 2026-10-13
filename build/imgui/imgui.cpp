@@ -1391,6 +1391,13 @@ extern "C" void (*ImGui_g_MinimizeCallback)(const char* window_title);
 void (*ImGui_g_MinimizeCallback)(const char* window_title) = nullptr;
 
 // IMRUN: BACK button popup support (extern "C" so shell can call)
+extern "C" bool ImGui_GetWindowPosByName(const char* name, float* x, float* y)
+{
+    ImGuiWindow* w = FindWindowByName(name);
+    if (w == NULL) return false;
+    *x = w->Pos.x; *y = w->Pos.y;
+    return true;
+}
 extern "C" int ImGui_OpenPopupCount(void) { return (int)GImGui->OpenPopupStack.Size; }
 extern "C" void ImGui_CloseTopPopup(void)
 {

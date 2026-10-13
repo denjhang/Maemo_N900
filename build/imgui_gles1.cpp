@@ -101,6 +101,7 @@ int igui_init(int w, int h, IGlfns *fns) {
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)w, (float)h);
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; /* arrows+Enter drive the UI */
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; /* dynamic font sizes */
     io.MouseDragThreshold = 3.0f; /* touch: 6px default eats finger gestures */
     io.DeltaTime = 1.0f / 60.0f;
@@ -274,6 +275,8 @@ static ShellApp g_apps[] = {
 /* desktop edit mode: long-press an icon -> red X badges (uninstall) */
 static bool g_desk_edit = false;
 static char g_desk_filter[32] = ""; /* desktop keyboard app filter */
+static bool g_win_move = false;        /* Ctrl+M: arrow-key window move mode */
+static float g_nudge_dx = 0, g_nudge_dy = 0;
 static int g_dyn_dead = -1;         /* index pending dlclose+rm at frame start */
 static const int NAPPS = (int)(sizeof g_apps / sizeof g_apps[0]);
 static int g_focus = -1;          /* focused window, -1 = desktop only */
@@ -314,6 +317,13 @@ void igui_key_char(const char *utf8) {
    XKB composes Fn+key into the charsym - so only modifiers need wiring. */
 void igui_special_key(unsigned ks, int down) {
     ImGuiIO &io = ImGui::GetIO();
+    /* Ctrl+M move mode: arrows nudge the focused window (24px steps) */
+    if (down && g_win_move && g_focus >= 0) {
+        if (ks == 0xff51) { g_nudge_dx -= 24; return; }
+        if (ks == 0xff53) { g_nudge_dx += 24; return; }
+        if (ks == 0xff52) { g_nudge_dy -= 24; return; }
+        if (ks == 0xff54) { g_nudge_dy += 24; return; }
+    }
     /* desktop filter control: BKSP=del, ENTER=open first match, ESC=clear */
     if (down && g_focus < 0 && g_desk_filter[0]) {
         if (ks == 0xff08) { /* BackSpace */
@@ -524,7 +534,29 @@ static void shell_focus(int i) {
 /* ctrl+letter combos (X11 pump path; N900 ctrl = X keycode 37) */
 void igui_ctrl_combo(char c) {
     if (c == 'w' || c == 'W') { if (g_focus >= 0) shell_close(g_focus); }
-    else if (c == 'm' || c == 'M') { if (g_focus >= 0) shell_minimize(g_focus); }
+    else if (c == 't' || c == 'T') { /* Ctrl+T: cycle focused window */
+        int order[24], n = 0;
+        for (int i = 0; i < NAPPS; i++)
+            if (g_apps[i].open && !g_apps[i].mini && !g_apps[i].closing) order[n++] = i;
+        for (int k = 0; k < g_dyn_n; k++)
+            if (g_dyn[k].open && !g_dyn[k].mini && !g_dyn[k].closing) order[n++] = NAPPS + k;
+        if (!n) return;
+        int cur = -1;
+        for (int k = 0; k < n; k++) if (order[k] == g_focus) cur = k;
+        int nxt = order[(cur + 1) % n];
+        if (nxt < NAPPS) shell_focus(nxt);
+        else {
+            DynApp &a = g_dyn[nxt - NAPPS];
+            if (!a.ever) { a.cascade = true; a.ever = true; }
+            a.open = true; a.mini = false; a.anim = 0; a.anim_t0 = now_double();
+            g_focus = nxt;
+        }
+    }
+    else if (c == 'm' || c == 'M') { /* Ctrl+M: toggle window move mode */
+        g_win_move = !g_win_move;
+        g_nudge_dx = g_nudge_dy = 0;
+        vibra_ping(50);
+    }
 }
 void igui_close_focused(void) { if (g_focus >= 0) shell_close(g_focus); }
 
@@ -581,6 +613,17 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
             float e = t * t * (3 - 2 * t); /* smoothstep: born from nothing */
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, e);
             pushed_alpha = true;
+        }
+    }
+    if (g_win_move && g_focus == i && (g_nudge_dx || g_nudge_dy)) {
+        extern bool ImGui_GetWindowPosByName(const char *, float *, float *);
+        float wx = 0, wy = 0;
+        char tname[64];
+        snprintf(tname, sizeof tname, "%s###app%d", a.name, i);
+        if (ImGui_GetWindowPosByName(tname, &wx, &wy)) {
+            ImGui::SetNextWindowPos(ImVec2(wx + g_nudge_dx, wy + g_nudge_dy),
+                                    ImGuiCond_Always); /* Always => undocks */
+            g_nudge_dx = g_nudge_dy = 0;
         }
     }
     if (!pushed_alpha && !a.cascade) {
@@ -714,7 +757,8 @@ void igui_build_ui(double t, float fps) {
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                     ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings);
+                     ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBackground); /* else it blankets the desktop */
         ImGui::DockSpace(ImGui::GetID("DockSpace"), ImVec2(0, 0),
                          ImGuiDockNodeFlags_PassthruCentralNode);
         ImGui::End();
@@ -735,8 +779,7 @@ void igui_build_ui(double t, float fps) {
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | /* scrollbar allowed: vertical
                     scrolling desktop when apps exceed one screen */
-                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                 ImGuiWindowFlags_NoNav);
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
     /* desktop keyboard filter: type letters while on desktop to find apps */
     if (g_desk_filter[0]) {
         ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -771,6 +814,10 @@ void igui_build_ui(double t, float fps) {
             char hid[16];
             snprintf(hid, sizeof hid, "##desk%d", i);
             static double hold_t0[16] = {0};
+            if (ImGui::IsItemFocused() && !g_desk_edit) { /* keyboard nav highlight */
+                dl->AddRect(ImVec2(bx - 3, by - 3), ImVec2(bx + cellw - 11, by + cellh - 9),
+                            IM_COL32(120, 220, 255, 255), 12.0f, 0, 3.5f);
+            }
             if (ImGui::InvisibleButton(hid, ImVec2(cellw - 14, cellh - 12))) {
                 if (g_desk_edit) {
                     /* tap near the red X badge = uninstall NOW, no confirm */
@@ -1196,6 +1243,17 @@ void igui_build_ui(double t, float fps) {
                 float e = tt * tt * (3 - 2 * tt);
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, e);
                 pushed_alpha = true;
+            }
+        }
+        if (g_win_move && g_focus == NAPPS + di && (g_nudge_dx || g_nudge_dy)) {
+            extern bool ImGui_GetWindowPosByName(const char *, float *, float *);
+            float wx = 0, wy = 0;
+            char tn[80];
+            snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
+            if (ImGui_GetWindowPosByName(tn, &wx, &wy)) {
+                ImGui::SetNextWindowPos(ImVec2(wx + g_nudge_dx, wy + g_nudge_dy),
+                                        ImGuiCond_Always);
+                g_nudge_dx = g_nudge_dy = 0;
             }
         }
         char title[80];
