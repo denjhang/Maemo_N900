@@ -3955,6 +3955,7 @@ namespace ImGui
 
     // Widgets: Window Decorations
     IMGUI_API bool          CloseButton(ImGuiID id, const ImVec2& pos);
+        IMGUI_API bool      MinimizeButton(ImGuiID id, const ImVec2& pos); // custom IMRUN
     IMGUI_API bool          CollapseButton(ImGuiID id, const ImVec2& pos, ImGuiDockNode* dock_node);
     IMGUI_API void          Scrollbar(ImGuiAxis axis);
     IMGUI_API bool          ScrollbarEx(const ImRect& bb, ImGuiID id, ImGuiAxis axis, ImS64* p_scroll_v, ImS64 avail_v, ImS64 contents_v, ImDrawFlags draw_rounding_flags = 0);

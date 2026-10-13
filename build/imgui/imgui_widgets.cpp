@@ -899,6 +899,35 @@ bool ImGui::ArrowButton(const char* str_id, ImGuiDir dir)
     return ArrowButtonEx(str_id, dir, ImVec2(sz, sz), ImGuiButtonFlags_None);
 }
 
+// Button to minimize a window (custom for IMRUN shell): same interaction
+// model as CloseButton, draws an underscore instead of a cross.
+bool ImGui::MinimizeButton(ImGuiID id, const ImVec2& pos)
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* window = g.CurrentWindow;
+    const ImRect bb(pos, pos + ImVec2(g.FontSize, g.FontSize));
+    ImRect bb_interact = bb;
+    const float area_to_visible_ratio = window->OuterRectClipped.GetArea() / bb.GetArea();
+    if (area_to_visible_ratio < 1.5f)
+        bb_interact.Expand(ImTrunc(bb_interact.GetSize() * -0.25f));
+    bool is_clipped = !ItemAdd(bb_interact, id);
+    bool hovered, held;
+    bool pressed = ButtonBehavior(bb_interact, id, &hovered, &held);
+    if (is_clipped)
+        return pressed;
+    ImU32 bg_col = GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
+    if (hovered)
+        window->DrawList->AddRectFilled(bb.Min, bb.Max, bg_col);
+    RenderNavCursor(bb, id, ImGuiNavRenderCursorFlags_Compact);
+    const ImU32 line_col = GetColorU32(ImGuiCol_Text);
+    const ImVec2 c = bb.GetCenter() - ImVec2(0.5f, 0.5f);
+    const float half = g.FontSize * 0.5f * 0.7071f;
+    const float th = 1.0f * (float)(int)g.Style._MainScale;
+    window->DrawList->AddLine(c + ImVec2(-half, half * 0.6f), c + ImVec2(half, half * 0.6f), line_col, th + 1.0f);
+    IMGUI_TEST_ENGINE_ITEM_INFO(id, "Minimize", g.LastItemData.StatusFlags);
+    return pressed;
+}
+
 // Button to close a window
 bool ImGui::CloseButton(ImGuiID id, const ImVec2& pos)
 {

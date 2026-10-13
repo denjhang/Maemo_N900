@@ -91,6 +91,7 @@ static void upload_texture(ImTextureData *tex) {
     fontTex = id;
 }
 
+void imrun_minimize_by_title(const char *title);
 int igui_init(int w, int h, IGlfns *fns) {
     gl = *fns;
     scrW = w; scrH = h;
@@ -102,6 +103,12 @@ int igui_init(int w, int h, IGlfns *fns) {
     io.MouseDragThreshold = 3.0f; /* touch: 6px default eats finger gestures */
     io.DeltaTime = 1.0f / 60.0f;
     io.IniFilename = "/home/user/imrun.ini"; /* window pos/size persist forever */
+    {   /* patched ImGui core passes the window title when "_" is hit */
+        extern void (*ImGui_g_MinimizeCallback)(const char *title);
+        ImGui_g_MinimizeCallback = [](const char *title) {
+            imrun_minimize_by_title(title);
+        };
+    }
     ImGui::StyleColorsDark();
     {
         /* shell polish: rounded, soft; resistive-friendly paddings */
@@ -214,6 +221,9 @@ static int g_focus = -1;          /* focused window, -1 = desktop only */
 bool g_ctrl_down = false;         /* fed by igui_special_key / X keycode 37 */
 static void shell_close(int i);       /* defined below */
 static void shell_minimize(int i);
+/* patched-ImGui native minimize hook: window title "NAME###appN" -> N */
+void imrun_minimize_by_title(const char *title);
+extern "C" void imrun_audio_stop_all(void); /* gldemo side: TONEGEN cleanup */
 void igui_ctrl_combo(char c);         /* from X11 pump: ctrl+letter combos */
 
 void igui_key_char(const char *utf8) {
@@ -344,10 +354,18 @@ static void shell_close(int i) {
     g_apps[i].open = false;
     g_apps[i].mini = false;
     if (g_focus == i) g_focus = -1;
+    if (i == 2) imrun_audio_stop_all(); /* TONEGEN: audio dies with its window */
 }
 static void shell_minimize(int i) {
     g_apps[i].mini = true;
     if (g_focus == i) g_focus = -1;
+}
+void imrun_minimize_by_title(const char *title) {
+    if (!title) return;
+    const char *h = strstr(title, "###app");
+    if (!h) return;
+    int i = atoi(h + 6);
+    if (i >= 0 && i < NAPPS) shell_minimize(i);
 }
 static void shell_minimize_all(void) {
     for (int i = 0; i < NAPPS; i++) g_apps[i].mini = true;

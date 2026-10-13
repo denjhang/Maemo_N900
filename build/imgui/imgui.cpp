@@ -1386,6 +1386,11 @@ static bool             Platform_OpenInShellFn_DefaultImpl(ImGuiContext* ctx, co
 
 namespace ImGui
 {
+// custom IMRUN minimize hook (set by shell; called with window title)
+extern "C" void (*ImGui_g_MinimizeCallback)(const char* window_title);
+void (*ImGui_g_MinimizeCallback)(const char* window_title) = nullptr;
+void (*g_MinimizeCallback)(const char* window_title) = ImGui_g_MinimizeCallback;
+
 // Item
 static void             ItemHandleShortcut(ImGuiID id);
 
@@ -7705,6 +7710,17 @@ void ImGui::RenderWindowTitleBarContents(ImGuiWindow* window, const ImRect& titl
     if (has_collapse_button)
         if (CollapseButton(window->GetID("#COLLAPSE"), collapse_button_pos, NULL))
             window->WantCollapseToggle = true; // Defer actual collapsing to next frame as we are too far in the Begin() function
+
+    // Minimize button (custom IMRUN): left of the close button
+    if (has_close_button && ImGui::ImGui_g_MinimizeCallback)
+    {
+        ImGuiItemFlags backup_item_flags_m = g.CurrentItemFlags;
+        g.CurrentItemFlags |= ImGuiItemFlags_NoFocus;
+        ImVec2 min_pos = ImVec2(close_button_pos.x - button_sz - style.ItemInnerSpacing.x, close_button_pos.y);
+        if (MinimizeButton(window->GetID("#MIN"), min_pos))
+            ImGui::ImGui_g_MinimizeCallback(window->Name);
+        g.CurrentItemFlags = backup_item_flags_m;
+    }
 
     // Close button
     if (has_close_button)

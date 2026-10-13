@@ -184,3 +184,11 @@
 - 任务栏红叉已删；任务栏 chip 显示完整应用名
 - 新增视觉自测钩子：touch /home/user/gopen 启动即开 3 个 APP（回归用）
 - 窗口底部红色 CLOSE 大按钮保留
+
+## IMRUN Shell v21（2026-10-14，ImGui 核心补丁：原生标题栏最小化 + 窗口生命周期）
+- 二进制 md5: c710bf59e8487e55afa86929dc47d71a（/home/user/imrun）
+- **直接改了 ImGui 源码**（用户授权"不能自己创新结构吗"）：
+  - imgui_widgets.cpp 新增 `MinimizeButton(id,pos)`——CloseButton 同款交互/命中模型，画下划线字形
+  - imgui.cpp 标题栏渲染处、Close 按钮左侧插入 MinimizeButton；导出 C 符号 `ImGui_g_MinimizeCallback(title)`，shell 注册回调按 `###appN` 解析目标窗口
+  - **原生标题栏级别，停靠/浮动都渲染**（dock 节点吞按钮的问题从核心侧解决——标题栏绘制路径就带这个按钮）
+- **窗口生命周期**：TONEGEN 关窗 = 音频停（shell_close(2) 调 imrun_audio_stop_all，走异步控制线程不阻塞 UI）；最小化不停播（后台继续响，合理默认）
