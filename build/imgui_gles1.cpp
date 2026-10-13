@@ -93,10 +93,16 @@ int igui_init(int w, int h, IGlfns *fns) {
     io.DeltaTime = 1.0f / 60.0f;
     ImGui::StyleColorsDark();
 #if IMGUI_VERSION_NUM >= 19200
-    ImGui::GetStyle().FontScaleMain = 1.7f;
+    ImGui::GetStyle().FontScaleMain = 1.0f; /* no runtime scaling */
 #else
-    io.FontGlobalScale = 1.7f;
+    io.FontGlobalScale = 1.0f;
 #endif
+    /* pixel-perfect fonts, same recipe as the music player v16:
+       rasterize at the FINAL pixel size + snap to pixels, never upscale */
+    ImFontConfig fcfg;
+    fcfg.SizePixels = 22.0f;
+    fcfg.PixelSnapH = true;
+    io.Fonts->AddFontDefault(&fcfg);
     // build default font atlas now (1.92 dynamic font system: mark wants-update)
     return 0;
 }
