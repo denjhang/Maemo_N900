@@ -58,3 +58,14 @@
 - AVTEST=1：3 秒后自动 20 秒低音量测试音 + 周期性 UI 压力
 
 ## 已知待修
+## 音频终版架构（第六版：启动持有制，vgmplay 生命周期模式）
+- **启动时 snd_pcm_open("plughw:0,0") + 完整 hw/sw_params，全程持有到退出**。pulse 是按需占用（module-suspend-idle）：闲置时释放硬件、系统音效一响就抢回。之前每次 PLAY/STOP 开关设备 = 和 pulse 赛跑 → "时有时无"（EBUSY 静默失败）。持有制一劳永逸（vgmplay 的 libao 也是 open 一次用到底）
+- PLAY = prepare + 起写线程；STOP = 停线程（PCM 不关）
+- 音量：软件增益 VOL 0-1000%（100%=基准），±32767 硬限幅
+- 波形：SINE/TRIANGLE/SQUARE/SAW 四选一（相位归一 0..1 查表式生成）
+- **XSetInputFocus 必须延迟到窗口完全 mapped+fullscreen 之后**（主循环第 10 帧）；map 后立即调用会 BadMatch，Xlib 默认错误处理器直接杀进程（表现为"无声+程序消失"）
+- 挂起焦点抓取后键盘事件恢复（XSelectInput KeyPress/KeyRelease + XLookupString）
+
+### 已知尾巴（下一版修）
+- PLAY 开始瞬间约 0.5s 杂音：DMA 重启时重放上次残留缓冲 → 需要 STOP 时 snd_pcm_drop 清缓冲
+- STOP 后偶尔还有余音：停线程后缓冲内最多 0.74s 未播数据继续放完 → 同上，drop 解决

@@ -252,7 +252,8 @@ extern char hw[8][96];
 extern int hw_n;
 extern void audio_toggle(int on);
 extern void audio_stop_full(void);
-extern void vibra_ping(void);
+extern void vibra_ping(int ms);
+extern void vibra_stop(void);
 extern int audio_start(int seconds);
 double now_double();
 }
@@ -410,15 +411,26 @@ void igui_build_ui(double t, float fps) {
                 ImGui::Text("ALSA PCM: idle");
             if (ImGui::Button("PLAY 20s"))
                 audio_start(20);
+            {
+                extern int audio_volume;
+                extern int audio_wave;
+                const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
+                ImGui::Combo("WAVE", &audio_wave, waves, 4);
+                ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
+            }
             ImGui::SameLine();
             if (ImGui::Button("STOP"))
                 audio_stop_full(); /* join writer thread BEFORE closing PCM */
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("VIBRA")) {
-            ImGui::TextUnformatted("MCE vibrator via dbus (system bus)");
-            if (ImGui::Button("PING VIBRA"))
-                vibra_ping();
+            static int ms = 1000;
+            ImGui::SliderInt("DURATION", &ms, 100, 5000, "%d ms");
+            if (ImGui::Button("VIBRATE"))
+                vibra_ping(ms);
+            ImGui::SameLine();
+            if (ImGui::Button("STOP ALL"))
+                vibra_stop();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("KEYS")) {

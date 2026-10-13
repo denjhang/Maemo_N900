@@ -59,6 +59,7 @@ static int (*pXPending)(void *);
 static int (*pXNextEvent)(void *, void *);
 static int (*pXFlush)(void *);
 static int (*pXLookupString)(void *, char *, int, void **, void *);
+static int (*pXSetInputFocus)(void *, unsigned long, int, unsigned long);
 /* ALSA: sound output without any audio framework */
 typedef struct _snd_pcm snd_pcm_t;
 static void *hALSA;
@@ -67,10 +68,26 @@ static int (*snd_pcm_set_params)(snd_pcm_t *, int, int, unsigned, unsigned, int,
 static long (*snd_pcm_writei)(snd_pcm_t *, const void *, unsigned long);
 static int (*snd_pcm_close)(snd_pcm_t *);
 static int (*snd_pcm_prepare)(snd_pcm_t *);
+typedef struct snd_pcm_hw_params snd_pcm_hw_params_t;
+typedef struct snd_pcm_sw_params snd_pcm_sw_params_t;
+static int (*snd_pcm_hw_params_any)(snd_pcm_t *, snd_pcm_hw_params_t *);
+static int (*snd_pcm_hw_params_set_access)(snd_pcm_t *, snd_pcm_hw_params_t *, int);
+static int (*snd_pcm_hw_params_set_format)(snd_pcm_t *, snd_pcm_hw_params_t *, int);
+static int (*snd_pcm_hw_params_set_channels)(snd_pcm_t *, snd_pcm_hw_params_t *, unsigned);
+static int (*snd_pcm_hw_params_set_rate_near)(snd_pcm_t *, snd_pcm_hw_params_t *, unsigned *, int *);
+static int (*snd_pcm_hw_params_set_period_size_near)(snd_pcm_t *, snd_pcm_hw_params_t *, unsigned long *, int *);
+static int (*snd_pcm_hw_params_set_buffer_size_near)(snd_pcm_t *, snd_pcm_hw_params_t *, unsigned long *);
+static int (*snd_pcm_hw_params)(snd_pcm_t *, snd_pcm_hw_params_t *);
+static int (*snd_pcm_sw_params_current)(snd_pcm_t *, snd_pcm_sw_params_t *);
+static int (*snd_pcm_sw_params_set_start_threshold)(snd_pcm_t *, snd_pcm_sw_params_t *, unsigned long);
+static int (*snd_pcm_sw_params)(snd_pcm_t *, snd_pcm_sw_params_t *);
 static snd_pcm_t *pcm;
 int audio_on;
 int audio_amp = 16000;
 int dbg_underruns = 0;
+int dbg_key_events = 0;
+int audio_volume = 100;
+int audio_wave = 0; /* 0 sine 1 tri 2 square 3 saw */ /* 0..1000 software gain (100=unity); >320 clamps hard, >1000 undefined */
 static float audio_phase;
 double audio_deadline = 0;
 double dbg_max_stall = 0;
@@ -234,6 +251,7 @@ static int load_syms(void) {
     *(void **)(&pXNextEvent) = dlsym(hX11, "XNextEvent");
     *(void **)(&pXFlush) = dlsym(hX11, "XFlush");
     *(void **)(&pXLookupString) = dlsym(hX11, "XLookupString");
+    *(void **)(&pXSetInputFocus) = dlsym(hX11, "XSetInputFocus");
     hALSA = dlopen("libasound.so.2", RTLD_NOW);
     if (hALSA) {
         snd_pcm_open = dlsym(hALSA, "snd_pcm_open");
@@ -241,6 +259,17 @@ static int load_syms(void) {
         snd_pcm_writei = dlsym(hALSA, "snd_pcm_writei");
         snd_pcm_close = dlsym(hALSA, "snd_pcm_close");
         snd_pcm_prepare = dlsym(hALSA, "snd_pcm_prepare");
+        snd_pcm_hw_params_any = dlsym(hALSA, "snd_pcm_hw_params_any");
+        snd_pcm_hw_params_set_access = dlsym(hALSA, "snd_pcm_hw_params_set_access");
+        snd_pcm_hw_params_set_format = dlsym(hALSA, "snd_pcm_hw_params_set_format");
+        snd_pcm_hw_params_set_channels = dlsym(hALSA, "snd_pcm_hw_params_set_channels");
+        snd_pcm_hw_params_set_rate_near = dlsym(hALSA, "snd_pcm_hw_params_set_rate_near");
+        snd_pcm_hw_params_set_period_size_near = dlsym(hALSA, "snd_pcm_hw_params_set_period_size_near");
+        snd_pcm_hw_params_set_buffer_size_near = dlsym(hALSA, "snd_pcm_hw_params_set_buffer_size_near");
+        snd_pcm_hw_params = dlsym(hALSA, "snd_pcm_hw_params");
+        snd_pcm_sw_params_current = dlsym(hALSA, "snd_pcm_sw_params_current");
+        snd_pcm_sw_params_set_start_threshold = dlsym(hALSA, "snd_pcm_sw_params_set_start_threshold");
+        snd_pcm_sw_params = dlsym(hALSA, "snd_pcm_sw_params");
         printf("ALSA symbols OK\n");
     } else printf("libasound not found: %s\n", dlerror());
     hPTHREAD = dlopen("libpthread.so.0", RTLD_NOW);
@@ -367,6 +396,9 @@ static int init_gfx(int w, int h) {
     pXMapWindow(xdpy, win);
     pXSync(xdpy, 0);
     send_fullscreen_msg(xdpy, win);
+    /* keyboard focus is grabbed from main loop (frame 10) - calling it here,
+       mid fullscreen transition, raises BadMatch and Xlib's default error
+       handler kills the process */
     /* touchscreen = core X pointer: motion + button 1 */
     if (pXSelectInput)
         pXSelectInput(xdpy, win,
@@ -421,7 +453,8 @@ extern double audio_deadline;
 extern double dbg_max_stall;
 extern int dbg_stalls;
 extern int audio_start(int seconds);
-extern void vibra_ping(void);
+extern void vibra_ping(int ms);
+extern void vibra_stop(void);
 extern void ui_stress_toggle(void);
 
 extern void igui_key_char(const char *utf8);
@@ -472,25 +505,37 @@ static void hw_sample(void) {
     if (hw_n == 0) snprintf(hw[hw_n++], 96, "hw sample failed");
 }
 
-void vibra_ping(void) {
+void vibra_ping(int ms) {
+    /* one-shot, self-terminating pattern with explicit deactivate right
+       after the requested duration - never loops forever like the call
+       pattern did */
+    char cmd[256];
+    snprintf(cmd, sizeof cmd,
+             "(dbus-send --system --type=method_call --dest=com.nokia.mce "
+             "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
+             "pattern_activate string:PatternChatAndEmail;"
+             " sleep %d;"
+             " dbus-send --system --type=method_call --dest=com.nokia.mce "
+             "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
+             "pattern_deactivate string:PatternChatAndEmail) 2>/dev/null &",
+             ms / 1000);
+    int r = system(cmd);
+    (void)r;
+}
+
+void vibra_stop(void) {
     int r = system("dbus-send --system --type=method_call --dest=com.nokia.mce "
                    "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
-                   "pattern_activate string:PatternIncomingCall 2>&1");
+                   "pattern_deactivate string:PatternIncomingCall 2>/dev/null;"
+                   "dbus-send --system --type=method_call --dest=com.nokia.mce "
+                   "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
+                   "pattern_deactivate string:PatternChatAndEmail 2>/dev/null &");
     (void)r;
 }
 
 void audio_toggle(int on) {
-    if (!snd_pcm_open) return;
-    if (on && !pcm) {
-        if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
-            printf("AUDIO: direct hw plughw:0,0 (pulse bypass)\n");
-            /* S16_LE=2, RW_INTERLEAVED=3, 2ch, 44100Hz, 500ms buffer */
-            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 1000000);
-        } else pcm = NULL;
-    } else if (!on && pcm) {
-        snd_pcm_close(pcm);
-        pcm = NULL;
-    }
+    /* PCM is opened once at startup and never closed - this only flips
+       the logical on/off used by the UI */
     audio_on = on && pcm != NULL;
 }
 
@@ -506,7 +551,16 @@ static void *audio_writer(void *arg) {
         if (audio_deadline && now() > audio_deadline)
             break;
         for (unsigned i = 0; i < PERIOD; i++) {
-            short s = (short)(sinf(audio_phase) * audio_amp);
+            float ph = audio_phase / 6.2831853f; ph -= (float)(int)ph; /* 0..1 */
+            float w;
+            switch (audio_wave) {
+            case 1: w = ph < 0.5f ? ph * 4.0f - 1.0f : 3.0f - ph * 4.0f; break; /* triangle */
+            case 2: w = ph < 0.5f ? 1.0f : -1.0f; break;                        /* square */
+            case 3: w = ph * 2.0f - 1.0f; break;                                 /* saw */
+            default: w = sinf(audio_phase); break;                               /* sine */
+            }
+            float v = (float)audio_amp * (audio_volume / 100.0f) * w;
+            short s = (short)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
             chunk[i * 2] = s;
             chunk[i * 2 + 1] = s;
             audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
@@ -532,16 +586,14 @@ static void *audio_writer(void *arg) {
 }
 
 int audio_start(int seconds) {
-    if (!snd_pcm_open || !pthread_create_fn) return 0;
-    if (thread_run) audio_stop_full(); /* never close PCM under a live thread */
-    audio_toggle(1);
-    if (!audio_on) return 0;
+    if (!pcm || !pthread_create_fn) return 0;
+    if (thread_run) audio_stop_full();
+    if (snd_pcm_prepare) snd_pcm_prepare(pcm); /* fresh start each time */
     audio_phase = 0;
     audio_deadline = seconds ? now() + seconds : 0;
     thread_run = 1;
     if (pthread_create_fn(&audio_tid, NULL, audio_writer, NULL) != 0) {
         thread_run = 0;
-        audio_toggle(0);
         return 0;
     }
     return 1;
@@ -549,17 +601,12 @@ int audio_start(int seconds) {
 
 void audio_stop_full(void) {
     if (thread_run) {
-        double t0 = now();
         thread_run = 0;
         if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
-        printf("AUDIO stop: writer joined in %.3fs\n", now() - t0);
-    }
-    if (pcm) {
-        printf("AUDIO stop: closing PCM\n");
-        audio_toggle(0);
-        printf("AUDIO stop: PCM closed\n");
+        printf("AUDIO: writer stopped (pcm held)\n");
     }
     audio_deadline = 0;
+    audio_on = 0;
 }
 
 
@@ -610,6 +657,39 @@ int main(void) {
         printf("privdrop uid=%d\n", (int)getuid());
     }
     if (init_gfx(W, H)) return 1;
+    /* grab the sound card ONCE, hold for entire app lifetime - pulse is
+       on-demand (module-suspend-idle): after idle it releases hw, we take
+       it and never let go. No open/close racing, no EBUSY intermittency. */
+    if (snd_pcm_open) {
+        if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
+            char hwp[512], swp[128];
+            int er = 0;
+            er |= snd_pcm_hw_params_any(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
+            er |= snd_pcm_hw_params_set_access(pcm, (snd_pcm_hw_params_t *)hwp, 3) < 0;
+            er |= snd_pcm_hw_params_set_format(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
+            er |= snd_pcm_hw_params_set_channels(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
+            unsigned rate = 44100; int dir = 0;
+            er |= snd_pcm_hw_params_set_rate_near(pcm, (snd_pcm_hw_params_t *)hwp, &rate, &dir) < 0;
+            unsigned long ps = 1024;
+            er |= snd_pcm_hw_params_set_period_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &ps, &dir) < 0;
+            unsigned long bs = 32768;
+            er |= snd_pcm_hw_params_set_buffer_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &bs) < 0;
+            er |= snd_pcm_hw_params(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
+            if (!er) {
+                snd_pcm_sw_params_current(pcm, (snd_pcm_sw_params_t *)swp);
+                snd_pcm_sw_params_set_start_threshold(pcm, (snd_pcm_sw_params_t *)swp, 1024);
+                snd_pcm_sw_params(pcm, (snd_pcm_sw_params_t *)swp);
+            }
+            printf("AUDIO: hw held from startup (%s rate=%u)\n", er ? "PARAMS FAIL" : "OK", rate);
+        } else if (snd_pcm_open(&pcm, "default", 0, 0) == 0) {
+            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 1000000);
+            printf("AUDIO: via pulse default (hw busy at boot)\n");
+        } else {
+            printf("AUDIO: no device\n");
+        }
+    }
+
+
     build_cube();
     IGlfns fns;
     memset(&fns, 0, sizeof fns);
@@ -670,6 +750,7 @@ int main(void) {
                     char kb[16] = {0};
                     if (pXLookupString)
                         pXLookupString(&ev, kb, sizeof kb - 1, NULL, NULL);
+                    dbg_key_events++;
                     snprintf(last_key, sizeof last_key, "KEY %u %s '%s'",
                              (unsigned)ev.button, ev.type == 2 ? "DOWN" : "UP", kb);
                     if (ev.type == 2 && kb[0]) igui_key_char(kb);
@@ -683,6 +764,11 @@ int main(void) {
         if (frames % 60 == 0) hw_sample();
         if (osso_display_blanking_pause && frames % 1500 == 0)
             osso_display_blanking_pause(osso_ctx);
+        if (frames == 10 && pXSetInputFocus) {
+            /* window fully mapped + fullscreen by now: focus grab is safe */
+            pXSetInputFocus(xdpy, win, 1 /*RevertToParent*/, 0 /*CurrentTime*/);
+            pXSync(xdpy, 0);
+        }
         double el = (t = now()) - t0;
         if (avtest && !av_started && el > 2.5) {
             audio_amp = 2500; /* quiet: don't disturb the human */
