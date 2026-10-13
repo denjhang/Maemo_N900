@@ -199,31 +199,24 @@ void ui_stress_toggle(void) {
 }
 
 /* ============ IMRUN shell state (declared early: key path uses it) ======= */
-struct ShellApp { const char *name; bool open; bool mini; };
+struct ShellApp { const char *name; bool open; bool mini;
+                  float anim; double anim_t0;   /* open/restore transition */ };
 static ShellApp g_apps[] = {
-    {"IMGUI", false, false}, {"WIDGETS", false, false}, {"TONEGEN", false, false},
-    {"VIBRA", false, false}, {"KEYS", false, false}, {"FONTS", false, false},
-    {"SYSINFO", false, false},
+    {"IMGUI", false, false, 1, 0}, {"WIDGETS", false, false, 1, 0},
+    {"TONEGEN", false, false, 1, 0}, {"VIBRA", false, false, 1, 0},
+    {"KEYS", false, false, 1, 0}, {"FONTS", false, false, 1, 0},
+    {"SYSINFO", false, false, 1, 0},
 };
 static const int NAPPS = (int)(sizeof g_apps / sizeof g_apps[0]);
 static int g_focus = -1;          /* focused window, -1 = desktop only */
-bool g_ctrl_down = false;         /* fed by igui_special_key */
+bool g_ctrl_down = false;         /* fed by igui_special_key / X keycode 37 */
 static void shell_close(int i);       /* defined below */
 static void shell_minimize(int i);
+void igui_ctrl_combo(char c);         /* from X11 pump: ctrl+letter combos */
 
 void igui_key_char(const char *utf8) {
-    /* PC keyboard habits: Ctrl+W close, Ctrl+M minimize (N900 has CTRL) */
-    if (g_ctrl_down && utf8 && !utf8[1]) {
-        char c = utf8[0];
-        if (c == 'w' || c == 'W') {
-            if (g_focus >= 0) shell_close(g_focus);
-            return;
-        }
-        if (c == 'm' || c == 'M') {
-            if (g_focus >= 0) shell_minimize(g_focus);
-            return;
-        }
-    }
+    /* plain Ctrl+W/M arrives here as control bytes 0x17/0x0d - the printable
+       filter in the pump drops them, combos go through igui_ctrl_combo */
     ImGui::GetIO().AddInputCharactersUTF8(utf8);
 }
 
@@ -358,7 +351,13 @@ static void shell_minimize_all(void) {
     for (int i = 0; i < NAPPS; i++) g_apps[i].mini = true;
     g_focus = -1;
 }
-static void shell_focus(int i) { g_focus = i; g_apps[i].open = true; g_apps[i].mini = false; }
+static void shell_focus(int i) { g_focus = i; g_apps[i].open = true; g_apps[i].mini = false;
+                                 g_apps[i].anim = 0; g_apps[i].anim_t0 = now_double(); }
+/* ctrl+letter combos (X11 pump path; N900 ctrl = X keycode 37) */
+void igui_ctrl_combo(char c) {
+    if (c == 'w' || c == 'W') { if (g_focus >= 0) shell_close(g_focus); }
+    else if (c == 'm' || c == 'M') { if (g_focus >= 0) shell_minimize(g_focus); }
+}
 void igui_close_focused(void) { if (g_focus >= 0) shell_close(g_focus); }
 
 /* device-verified paths: CPU temp = omap34xx_temp via hwmon0 (raw °C, NOT
@@ -374,14 +373,41 @@ static void shell_read_sysfs(void) {
     if (f) { if (fgets(line, sizeof line, f)) g_temp = atoi(line); fclose(f); }
 }
 
-/* one app window: Begin with close + touch-sized buttons inside */
+/* one app window: Begin with close + touch-sized buttons inside.
+   open/restore transition: 220ms ease from the taskbar area + fade-in */
 static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
-    if (!g_apps[i].open || g_apps[i].mini) return false;
-    ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+    ShellApp &a = g_apps[i];
+    if (!a.open || a.mini) return false;
+    bool pushed_alpha = false;
+    if (a.anim < 1.0f) {
+        float t = (float)(now_double() - a.anim_t0) / 0.22f;
+        if (t >= 1.0f) {
+            a.anim = 1.0f;
+        } else {
+            a.anim = t;
+            float e = t * t * (3 - 2 * t); /* smoothstep */
+            /* origin: rough taskbar slot x, above the bottom bar */
+            int slot = 0;
+            for (int k = 0; k < i; k++) if (g_apps[k].open) slot++;
+            ImVec2 from = ImVec2(108 + slot * 74, 350);
+            ImGui::SetNextWindowPos(ImVec2(from.x + (pos.x - from.x) * e,
+                                           from.y + (pos.y - from.y) * e),
+                                    ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(200 + (size.x - 200) * e,
+                                            100 + (size.y - 100) * e),
+                                     ImGuiCond_Always);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.25f + 0.75f * e);
+            pushed_alpha = true;
+        }
+    }
+    if (!pushed_alpha) {
+        ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+    }
     char title[64];
-    snprintf(title, sizeof title, "%s###app%d", g_apps[i].name, i);
-    bool shown = ImGui::Begin(title, &g_apps[i].open);
+    snprintf(title, sizeof title, "%s###app%d", a.name, i);
+    bool shown = ImGui::Begin(title, &a.open);
+    if (pushed_alpha) ImGui::PopStyleVar();
     if (!shown) { ImGui::End(); shell_close(i); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
     return true;
@@ -573,10 +599,10 @@ void igui_build_ui(double t, float fps) {
     {
         ImDrawList *dl = ImGui::GetWindowDrawList();
         ImU32 line = IM_COL32(235, 240, 245, 255);
-        /* BACK: left chevron on a 48x48 button */
+        /* BACK: left chevron on a 48x48 button (press = strong highlight) */
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.08f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(1, 1, 1, 0.16f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.18f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.30f, 0.62f, 0.85f, 0.85f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
         if (ImGui::InvisibleButton("##back", ImVec2(48, 42))) /* BACK = Ctrl+W */
             igui_close_focused();
@@ -623,38 +649,40 @@ void igui_build_ui(double t, float fps) {
             ImGui::PopStyleColor(2);
             ImGui::SameLine();
         }
-        /* right side: [thermo C] [battery %] [clock] - icon + centered text */
+        /* right side: [thermo C] [battery %] [clock] - icon + centered text.
+           ImDrawList uses SCREEN coords: add this window's (0,432) offset! */
+        float wy = ImGui::GetWindowPos().y;   /* = 432 */
+        float ytxt = wy + 21 - ImGui::GetFontSize() * 0.5f;
         char bat[8] = "--", tmp[8] = "--", clk[8] = "--:--";
         if (g_batt_pct >= 0) snprintf(bat, sizeof bat, "%d", g_batt_pct);
         if (g_temp >= 0) snprintf(tmp, sizeof tmp, "%d", g_temp);
         snprintf(clk, sizeof clk, "%s", shell_clock());
         ImFont *f = ImGui::GetFont();
         float fs = ImGui::GetFontSize();
-        float ytxt = 21 - fs * 0.5f;
         /* temperature: thermometer icon + value + C */
         {
             float x = 800 - 348;
-            dl->AddCircleFilled(ImVec2(x, 30), 4.0f, IM_COL32(235, 90, 80, 255));
-            dl->AddLine(ImVec2(x, 30), ImVec2(x, 13), IM_COL32(235, 90, 80, 255), 4.0f);
+            float yc = wy + 21;
+            dl->AddCircleFilled(ImVec2(x, yc + 9), 4.0f, IM_COL32(235, 90, 80, 255));
+            dl->AddLine(ImVec2(x, yc + 9), ImVec2(x, yc - 8), IM_COL32(235, 90, 80, 255), 4.0f);
             ImVec2 ts = CalcTextSizeLocal(f, fs, tmp);
             dl->AddText(ImVec2(x + 9, ytxt), line, tmp);
-            ImVec2 ts2 = CalcTextSizeLocal(f, fs, "C");
             dl->AddText(ImVec2(x + 9 + ts.x + 2, ytxt),
                         IM_COL32(180, 190, 200, 230), "C");
-            (void)ts2;
         }
         /* battery: outline + fill by pct + nub + value% */
         {
             float x = 800 - 232;
-            dl->AddRect(ImVec2(x, 14), ImVec2(x + 30, 30), line, 3.0f, 0, 2.0f);
-            dl->AddRectFilled(ImVec2(x + 30, 18), ImVec2(x + 34, 26), line, 1.0f);
+            float yc = wy + 21;
+            dl->AddRect(ImVec2(x, yc - 7), ImVec2(x + 30, yc + 9), line, 3.0f, 0, 2.0f);
+            dl->AddRectFilled(ImVec2(x + 30, yc - 3), ImVec2(x + 34, yc + 5), line, 1.0f);
             int pct = g_batt_pct < 0 ? 0 : g_batt_pct;
             ImU32 col = pct > 40 ? IM_COL32(110, 220, 130, 255)
                       : pct > 15 ? IM_COL32(235, 190, 80, 255)
                                  : IM_COL32(235, 90, 80, 255);
             if (g_batt_pct >= 0)
-                dl->AddRectFilled(ImVec2(x + 3, 17),
-                                  ImVec2(x + 3 + 24 * pct / 100, 27), col, 2.0f);
+                dl->AddRectFilled(ImVec2(x + 3, yc - 4),
+                                  ImVec2(x + 3 + 24 * pct / 100, yc + 6), col, 2.0f);
             char btxt[12];
             snprintf(btxt, sizeof btxt, "%s%%", bat);
             ImVec2 ts = CalcTextSizeLocal(f, fs, btxt);
@@ -663,9 +691,10 @@ void igui_build_ui(double t, float fps) {
         /* clock: watch icon + HH:MM */
         {
             float x = 800 - 118;
-            dl->AddCircle(ImVec2(x, 21), 9.0f, line, 32, 2.0f);
-            dl->AddLine(ImVec2(x, 21), ImVec2(x, 15), line, 2.0f);
-            dl->AddLine(ImVec2(x, 21), ImVec2(x + 4.5f, 23), line, 2.0f);
+            float yc = wy + 21;
+            dl->AddCircle(ImVec2(x, yc), 9.0f, line, 32, 2.0f);
+            dl->AddLine(ImVec2(x, yc), ImVec2(x, yc - 6), line, 2.0f);
+            dl->AddLine(ImVec2(x, yc), ImVec2(x + 4.5f, yc + 2), line, 2.0f);
             ImVec2 ts = CalcTextSizeLocal(f, fs, clk);
             dl->AddText(ImVec2(x + 14 + (54 - ts.x) * 0.5f, ytxt), line, clk);
         }

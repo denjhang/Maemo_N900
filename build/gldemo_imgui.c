@@ -480,6 +480,7 @@ extern void igui_mouse_pos(float x, float y);
 extern void igui_mouse_btn(int btn, int down);
 extern void igui_key_char(const char *utf8);
 extern void igui_special_key(unsigned ks, int down);
+extern void igui_ctrl_combo(char c);
 extern double audio_deadline;
 extern double dbg_max_stall;
 extern int dbg_stalls;
@@ -938,15 +939,27 @@ int main(void) {
                     if (pXLookupString)
                         pXLookupString(&ev, kb, sizeof kb - 1, NULL, NULL);
                     dbg_key_events++;
-                    /* special keys: XLookupString returns empty/control bytes
-                       for Enter/Backspace/arrows/modifiers - resolve the
-                       keysym and feed ImGui's semantic key path (emulator-
-                       verified: Fn/SYM never appear here as plain chars) */
+                    /* X keycodes are authoritative on the N900 keyboard
+                       (device-verified): 37=CTRL, 25=W, 22=BKSP, 36=ENTER.
+                       Ctrl+letter turns into control bytes via XLookupString,
+                       which the printable filter drops - combos are resolved
+                       here from the base keysym instead. */
                     unsigned long ks = pXLookupKeysym ? pXLookupKeysym(&ev, 0) : 0;
-                    if ((ks & 0xff00) == 0xff00)
-                        igui_special_key((unsigned)ks, ev.type == 2);
-                    if (kb[0] >= 0x20 && (unsigned char)kb[0] < 0xf0 &&
-                        !(kb[0] == ' ' && (ks & 0xff00) == 0xff00))
+                    unsigned kc = ev.button; /* XKeyEvent.keycode field */
+                    int down = (ev.type == 2);
+                    static int x_ctrl = 0;
+                    if (kc == 37 || ks == 0xffe3 || ks == 0xffe4 || ks == 0xffe5) {
+                        x_ctrl = down;
+                        igui_special_key(0xffe3, down);
+                    } else if ((ks & 0xff00) == 0xff00 || kc == 22 || kc == 36) {
+                        unsigned k = (unsigned)ks;
+                        if (kc == 22) k = 0xff08; /* BackSpace */
+                        if (kc == 36) k = 0xff0d; /* Return */
+                        igui_special_key(k, down);
+                    } else if (x_ctrl && down && ks >= 'a' && ks <= 'z') {
+                        igui_ctrl_combo((char)ks);
+                    }
+                    if (kb[0] >= 0x20 && (unsigned char)kb[0] < 0xf0 && !x_ctrl)
                         if (ev.type == 2) igui_key_char(kb);
                     /* KEYS log: keysym hex beats guessing from empty strings */
                     snprintf(last_key, sizeof last_key, "KEY %u %s '%s' ks=%lx",
