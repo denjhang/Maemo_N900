@@ -136,3 +136,4 @@
 - 电阻屏纪律落地：全部点击式，目标 >=44px，零手势
 - 实现注：sysfs 读数用 fgets+atoi（fscanf 被 gcc11 重定向成 __isoc99_fscanf，无 shim）
 - AUTOTEST 回归 6/6 干净，音频基线无回退
+- **v12a 修正**：右下角电量/温度真数据源（设备实测）——CPU 温度 `/sys/class/hwmon/hwmon0/device/temp1_input`（omap34xx_temp，裸摄氏度非毫度）；电量 Fremantle 无 sysfs（bq27200 归 BME 守护进程独占）→ 后台线程 30s 调 `hal-get-property --udi .../bme --key battery.charge_level.percentage`（fork 永不进 UI 线程）。md5 e98064688a51089ecd556f779abe4989

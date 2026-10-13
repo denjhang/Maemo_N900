@@ -761,6 +761,24 @@ static void *audio_ctl(void *arg) {
 }
 static unsigned long audio_ctl_tid;
 
+/* battery % via HAL/BME (bq27200 is owned by bme daemon, no sysfs exposed).
+   popen(hal-get-property) forks - runs in its own thread, 30s cadence */
+int g_batt_pct = -1;
+static void *batt_reader(void *arg) {
+    (void)arg;
+    while (1) {
+        FILE *p = popen("hal-get-property --udi /org/freedesktop/Hal/devices/bme "
+                        "--key battery.charge_level.percentage 2>/dev/null", "r");
+        if (p) {
+            char b[32] = {0};
+            if (fgets(b, sizeof b, p)) g_batt_pct = atoi(b);
+            pclose(p);
+        }
+        if (usleep_fn) usleep_fn(30000000);
+    }
+    return NULL;
+}
+
 
 
 /* ============ background: drifting colored cubes ============ */
@@ -828,6 +846,11 @@ int main(void) {
     /* resident audio-control thread: PLAY/STOP buttons only set flags */
     if (pthread_create_fn && pcm)
         pthread_create_fn(&audio_ctl_tid, NULL, audio_ctl, NULL);
+    /* battery monitor thread (forks hal-get-property, never in UI thread) */
+    if (pthread_create_fn) {
+        unsigned long bt;
+        pthread_create_fn(&bt, NULL, batt_reader, NULL);
+    }
 
     /* AUTOTEST: reproduce rapid Play/Stop garbage, log everything, exit.
        Runs headless right after PCM grab - no GUI interaction needed. */

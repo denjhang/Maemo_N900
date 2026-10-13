@@ -318,17 +318,17 @@ static void shell_close(int i) {
 static void shell_focus(int i) { g_focus = i; g_apps[i].open = true; }
 void igui_close_focused(void) { if (g_focus >= 0) shell_close(g_focus); }
 
-/* sysfs reads are cached: battery + cpu temp, refresh every 90 frames
-   (fgets+sscanf: fscanf is __isoc99_fscanf here, no shim for it) */
-static int g_batt = -1, g_temp = -1;
+/* device-verified paths: CPU temp = omap34xx_temp via hwmon0 (raw °C, NOT
+   millidegrees); battery % = HAL/BME daemon, read by gldemo's batt_reader
+   thread into g_batt_pct (no sysfs node for bq27200 on Fremantle) */
+extern "C" int g_batt_pct;
+static int g_temp = -1;
 static void shell_read_sysfs(void) {
     static int cnt = 0;
     if (++cnt % 90) return;
     char line[64];
-    FILE *f = fopen("/sys/class/power_supply/bq27200-0/capacity", "r");
-    if (f) { if (fgets(line, sizeof line, f)) g_batt = atoi(line); fclose(f); }
-    f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
-    if (f) { if (fgets(line, sizeof line, f)) g_temp = atoi(line) / 1000; fclose(f); }
+    FILE *f = fopen("/sys/class/hwmon/hwmon0/device/temp1_input", "r");
+    if (f) { if (fgets(line, sizeof line, f)) g_temp = atoi(line); fclose(f); }
 }
 
 /* one app window: Begin with close + touch-sized CLOSE button inside */
@@ -434,7 +434,7 @@ void igui_build_ui(double t, float fps) {
     ImGui::SetCursorPos(ImVec2(rightx - 190, 11));
     ImGui::Text("%s", clock);
     ImGui::SetCursorPos(ImVec2(rightx - 130, 11));
-    if (g_batt >= 0) ImGui::Text("%d%%", g_batt); else ImGui::Text("--%%");
+    if (g_batt_pct >= 0) ImGui::Text("%d%%", g_batt_pct); else ImGui::Text("--%%");
     ImGui::SetCursorPos(ImVec2(rightx - 76, 11));
     if (g_temp >= 0) ImGui::Text("%dC", g_temp); else ImGui::Text("--C");
     ImGui::End();
