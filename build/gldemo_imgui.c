@@ -824,8 +824,21 @@ static void build_cube(void) {
     }
 }
 
+#include <signal.h>
+static void fatal_sig(int sig) {
+    alog("FATAL signal %d (segv=11 bus=7 abort=6 fpe=8)", sig);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    alog_t0 = now();
+    alog("LIFECYCLE boot");
+    signal(SIGSEGV, fatal_sig);
+    signal(SIGBUS, fatal_sig);
+    signal(SIGABRT, fatal_sig);
+    signal(SIGFPE, fatal_sig);
+    signal(SIGILL, fatal_sig);
     /* real-time audio pattern: start as root with SCHED_RR, then drop to
        'user' (uid 29999) before opening X/audio. RT policy is inherited by
        the audio writer thread created later. */
@@ -888,7 +901,7 @@ int main(void) {
             audio_stop_full();
             usleep_fn(150000);  /* quick re-tap */
         }
-        alog("=== AUTOTEST end ===");
+        alog("=== AUTOTEST end -> exit(0) (this is the \"flash quit\" if gautotest existed) ===");
         printf("AUTOTEST done, log at /home/user/audio_dbg.log\n");
         return 0;
     }

@@ -267,3 +267,8 @@
 - **任务栏 chip 三态**：聚焦=蓝色 / 按住=绿色 / 常态=永远带 1px 边框（不再出现光秃秃的文字）
 - **桌面键盘导航改为手写网格逻辑**（左右±1/上下±4/回车打开，选中格亮蓝粗边）——ImGui 原生 nav 在自由布局的桌面上方向推算混乱（框卡死在 keys 上）
 - igui_ctrl_combo 加了 CTRL+x 日志（o.log 可查组合键是否到达 shell 层）
+
+## IMRUN v0.3.2a（2026-10-14，桌面闪退排查 + 黑匣子）
+- 二进制 md5: 65a371b5414b8e9cfe68e4d01561077e（/home/user/imrun/imrun）
+- **桌面启动闪退排查**：以 user 干净环境实测 218 秒稳定（15FPS）——程序本身没问题；真凶锁定为遗留的自测触发文件（gautotest/gopen 曾让启动直接进 AUTOTEST 自动退出模式 = 表现为闪退），已全部清除并修正钩子
+- **黑匣子上机**：SIGSEGV/BUS/ABRT/FPE/ILL 全部捕获写 /home/user/audio_dbg.log（FATAL signal N）+ LIFECYCLE boot/exit 标记——以后任何闪退都有案底，不再盲猜
