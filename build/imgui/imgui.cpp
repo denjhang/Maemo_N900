@@ -1389,6 +1389,14 @@ namespace ImGui
 // custom IMRUN minimize hook (set by shell; called with window title)
 extern "C" void (*ImGui_g_MinimizeCallback)(const char* window_title);
 void (*ImGui_g_MinimizeCallback)(const char* window_title) = nullptr;
+
+// IMRUN: BACK button popup support (extern "C" so shell can call)
+extern "C" int ImGui_OpenPopupCount(void) { return (int)GImGui->OpenPopupStack.Size; }
+extern "C" void ImGui_CloseTopPopup(void)
+{
+    if (GImGui->OpenPopupStack.Size > 0)
+        ClosePopupToLevel(GImGui->OpenPopupStack.Size - 1, true);
+}
 void (*g_MinimizeCallback)(const char* window_title) = ImGui_g_MinimizeCallback;
 
 // Item

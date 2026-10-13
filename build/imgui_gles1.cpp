@@ -92,6 +92,8 @@ static void upload_texture(ImTextureData *tex) {
 }
 
 void imrun_minimize_by_title(const char *title);
+extern int ImGui_OpenPopupCount(void);   /* patched-core BACK support */
+extern void ImGui_CloseTopPopup(void);
 int igui_init(int w, int h, IGlfns *fns) {
     gl = *fns;
     scrW = w; scrH = h;
@@ -449,11 +451,15 @@ extern "C" ImFont *imrun_font_world(void) { return g_worldfont; }
 extern "C" ImFont *imrun_font_kr(void) { return g_krfont; }
 static void shell_minimize_all(void) {
     for (int i = 0; i < NAPPS; i++) g_apps[i].mini = true;
+    for (int k = 0; k < g_dyn_n; k++) g_dyn[k].mini = true;
     g_focus = -1;
 }
 static int g_cascade_seq = 0;         /* new windows stack from top-left */
+static bool g_uncollapse[16];  /* explicit open always un-collapses (stale
+                                    ini Collapsed=1 made apps look dead) */
 static void shell_focus(int i) {
     ShellApp &a = g_apps[i];
+    if (i >= 0 && i < 16) g_uncollapse[i] = true;
     if (!a.ever) {                    /* cascade ONLY on first-ever open:
                                        afterwards imgui.ini restores the
                                        user's saved pos/size verbatim */
@@ -520,6 +526,10 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     }
     char title[64];
     snprintf(title, sizeof title, "%s###app%d", a.name, i);
+    if (i < 16 && g_uncollapse[i]) {
+        g_uncollapse[i] = false;
+        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always);
+    }
     /* semi-transparent app windows (alpha adjustable in WALLPAP) */
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImVec4(0.09f, 0.11f, 0.16f, g_a_win));
@@ -674,7 +684,7 @@ void igui_build_ui(double t, float fps) {
                 } else if (dyn) {
                     DynApp &a = g_dyn[di];
                     if (!a.ever) { a.cascade = true; a.ever = true; }
-                    a.open = true; a.mini = false;
+                    a.open = true; a.mini = false; a.anim = 0; a.anim_t0 = -1;
                     a.anim = 0; a.anim_t0 = now_double();
                 } else shell_focus(i);
             }
@@ -774,9 +784,14 @@ void igui_build_ui(double t, float fps) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-        if (ImGui::InvisibleButton("##back", ImVec2(48, 42))) { /* Ctrl+W */
+        if (ImGui::InvisibleButton("##back", ImVec2(48, 42))) {
             g_back_hl = 1.0f;
-            igui_close_focused();
+            /* BACK semantics: collapse open popup menus (combo/context) one
+               level at a time; only when none left, close the focused app */
+            if (ImGui_OpenPopupCount() > 0)
+                ImGui_CloseTopPopup();
+            else
+                igui_close_focused();
         }
         {
             ImVec2 c0 = ImGui::GetItemRectMin();
@@ -815,15 +830,32 @@ void igui_build_ui(double t, float fps) {
                                       : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
             char tag[48];
             snprintf(tag, sizeof tag, "%s##run%d", nm, i);
+            /* chip_t0 states: 0=idle, >0=pressing(t0), -1=long-press fired */
+            static double chip_t0[24] = {0};
+            int ci = i < 24 ? i : 23;
             if (ImGui::Button(tag, ImVec2(0, 42))) {
-                if (dyn) {
-                    DynApp &a = g_dyn[di];
-                    if (mini || !foc) { if(!a.ever){a.cascade=true;a.ever=true;} a.open=true; a.mini=false; a.anim=0; a.anim_t0=now_double(); }
-                    else a.mini = true;
-                } else {
-                    if (mini || !foc) shell_focus(i);
-                    else shell_minimize(i);
+                if (chip_t0[ci] != -1) { /* quick tap only (long handled below) */
+                    if (dyn) {
+                        DynApp &a = g_dyn[di];
+                        if (mini || !foc) { if(!a.ever){a.cascade=true;a.ever=true;} a.open=true; a.mini=false; a.anim=0; a.anim_t0=now_double(); }
+                        else a.mini = true;
+                    } else {
+                        if (mini || !foc) shell_focus(i);
+                        else shell_minimize(i);
+                    }
                 }
+                chip_t0[ci] = 0;
+            }
+            if (ImGui::IsItemActive()) {
+                if (chip_t0[ci] == 0) chip_t0[ci] = ImGui::GetTime();
+                else if (chip_t0[ci] > 0 && ImGui::GetTime() - chip_t0[ci] > 0.5f) {
+                    chip_t0[ci] = -1;   /* stays until release consumes it */
+                    vibra_ping(80);
+                    if (dyn) g_dyn[di].open = false;
+                    else shell_close(i);
+                }
+            } else if (chip_t0[ci] > 0) {
+                chip_t0[ci] = 0;
             }
             ImGui::PopStyleColor();
             ImGui::SameLine();
