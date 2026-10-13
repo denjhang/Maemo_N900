@@ -66,12 +66,29 @@ static int (*snd_pcm_open)(snd_pcm_t **, const char *, int, int);
 static int (*snd_pcm_set_params)(snd_pcm_t *, int, int, unsigned, unsigned, int, unsigned);
 static long (*snd_pcm_writei)(snd_pcm_t *, const void *, unsigned long);
 static int (*snd_pcm_close)(snd_pcm_t *);
+static int (*snd_pcm_prepare)(snd_pcm_t *);
 static snd_pcm_t *pcm;
 int audio_on;
 static float audio_phase;
+double audio_deadline = 0;
+static void *hPTHREAD;
+static int (*pthread_create_fn)(unsigned long *, void *, void *(*)(void *), void *);
+static int (*pthread_join_fn)(unsigned long, void **);
+static int (*usleep_fn)(unsigned int);
+static void *hOSSO;
+static void *osso_ctx;
+static void *(*osso_initialize)(const char *, const char *, int, void *);
+static int (*osso_display_blanking_pause)(void *);
 char last_key[64];
 char hw[8][96];
 int hw_n;
+/* ring-buffer audio (SDL callback style) */
+#define RB_FRAMES 32768
+#define PERIOD 2048
+static short rb[RB_FRAMES * 2];
+static volatile unsigned rb_r, rb_w;
+static volatile int thread_run;
+static unsigned long audio_tid;
 
 static void *eglD, *eglS, *eglC;
 static unsigned (*peglInitialize)(void *, int *, int *);
@@ -216,8 +233,25 @@ static int load_syms(void) {
         snd_pcm_set_params = dlsym(hALSA, "snd_pcm_set_params");
         snd_pcm_writei = dlsym(hALSA, "snd_pcm_writei");
         snd_pcm_close = dlsym(hALSA, "snd_pcm_close");
+        snd_pcm_prepare = dlsym(hALSA, "snd_pcm_prepare");
         printf("ALSA symbols OK\n");
     } else printf("libasound not found: %s\n", dlerror());
+    hPTHREAD = dlopen("libpthread.so.0", RTLD_NOW);
+    if (hPTHREAD) {
+        pthread_create_fn = dlsym(hPTHREAD, "pthread_create");
+        pthread_join_fn = dlsym(hPTHREAD, "pthread_join");
+        usleep_fn = dlsym(hPTHREAD, "usleep");
+        printf("PTHREAD symbols OK\n");
+    } else printf("libpthread not found: %s\n", dlerror());
+    hOSSO = dlopen("libosso.so.1", RTLD_NOW);
+    if (!hOSSO) hOSSO = dlopen("libosso.so.2", RTLD_NOW);
+    if (hOSSO) {
+        osso_initialize = dlsym(hOSSO, "osso_initialize");
+        osso_display_blanking_pause = dlsym(hOSSO, "osso_display_blanking_pause");
+        if (osso_initialize)
+            osso_ctx = osso_initialize("com.nokia.gldemo", "1.0", 0, NULL);
+        printf("OSSO %s\n", osso_ctx ? "OK (blanking pause armed)" : "ctx FAIL");
+    } else printf("libosso not found\n");
     DLSYM(hX11, pXCreateColormap, "XCreateColormap");
     DLSYM(hX11, pXCreateWindow, "XCreateWindow");
     DLSYM(hEGL, peglInitialize, "eglInitialize");
@@ -259,6 +293,9 @@ static int load_syms(void) {
 
 static unsigned long win;
 static void *xdpy;
+
+#define W 800
+#define H 480
 
 static int init_gfx(int w, int h) {
     if (load_syms()) return 1;
@@ -367,6 +404,15 @@ typedef struct {
     void (*GetErrorFn)(void);
 } IGlfns;
 extern int igui_init(int w, int h, IGlfns *fns);
+extern void igui_newframe(float dt);
+extern void igui_build_ui(double t, float fps);
+extern void igui_render(void);
+extern void igui_mouse_pos(float x, float y);
+extern void igui_mouse_btn(int btn, int down);
+extern void igui_key_char(const char *utf8);
+extern double audio_deadline;
+extern int audio_start(int seconds);
+extern void vibra_ping(void);
 extern void igui_key_char(const char *utf8);
 
 static void hw_sample(void) {
@@ -418,7 +464,7 @@ static void hw_sample(void) {
 void vibra_ping(void) {
     int r = system("dbus-send --system --type=method_call --dest=com.nokia.mce "
                    "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
-                   "pattern_activate string:short 2>&1");
+                   "pattern_activate string:PatternIncomingCall 2>&1");
     (void)r;
 }
 
@@ -426,8 +472,8 @@ void audio_toggle(int on) {
     if (!snd_pcm_open) return;
     if (on && !pcm) {
         if (snd_pcm_open(&pcm, "default", 0 /*PLAYBACK*/, 0) == 0) {
-            /* S16_LE=2, RW_INTERLEAVED=3, 2ch, 44100Hz, 100ms latency */
-            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 100000);
+            /* S16_LE=2, RW_INTERLEAVED=3, 2ch, 44100Hz, 500ms buffer */
+            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 500000);
         } else pcm = NULL;
     } else if (!on && pcm) {
         snd_pcm_close(pcm);
@@ -436,26 +482,59 @@ void audio_toggle(int on) {
     audio_on = on && pcm != NULL;
 }
 
-static void audio_frame(void) {
-    if (!audio_on || !pcm) return;
-    static short buf[735 * 2];
-    for (int i = 0; i < 735; i++) {
-        short s = (short)(sinf(audio_phase) * 8000);
-        buf[i * 2] = s; buf[i * 2 + 1] = s;
-        audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
+/* SDL-callback-style: dedicated writer thread drains a ring buffer, so UI
+   frame hiccups can never underrun the device (PPSSPP/deadbeef pattern) */
+static void *audio_writer(void *arg) {
+    (void)arg;
+    short chunk[PERIOD * 2];
+    /* generator lives IN the writer thread: UI can stall forever,
+       audio never notices (deadbeef output-thread pattern) */
+    while (thread_run) {
+        if (audio_deadline && now() > audio_deadline)
+            break;
+        for (unsigned i = 0; i < PERIOD; i++) {
+            short s = (short)(sinf(audio_phase) * 16000);
+            chunk[i * 2] = s;
+            chunk[i * 2 + 1] = s;
+            audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
+        }
+        long w = snd_pcm_writei(pcm, chunk, PERIOD);
+        if (w < 0 && snd_pcm_prepare) {
+            snd_pcm_prepare(pcm);
+            w = snd_pcm_writei(pcm, chunk, PERIOD);
+        }
     }
-    snd_pcm_writei(pcm, buf, 735);
+    return NULL;
 }
 
-extern void igui_newframe(float dt);
-extern void igui_build_ui(double t, float fps);
-extern void igui_render(void);
-extern void igui_mouse_pos(float x, float y);
-extern void igui_mouse_btn(int btn, int down);
+int audio_start(int seconds) {
+    if (!snd_pcm_open || !pthread_create_fn) return 0;
+    audio_toggle(0);
+    audio_toggle(1);
+    if (!audio_on) return 0;
+    audio_phase = 0;
+    audio_deadline = seconds ? now() + seconds : 0;
+    thread_run = 1;
+    if (pthread_create_fn(&audio_tid, NULL, audio_writer, NULL) != 0) {
+        thread_run = 0;
+        audio_toggle(0);
+        return 0;
+    }
+    return 1;
+}
+
+static void audio_stop_full(void) {
+    if (thread_run) {
+        thread_run = 0;
+        if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
+    }
+    audio_toggle(0);
+    audio_deadline = 0;
+}
+
+
 
 /* ============ background: drifting colored cubes ============ */
-#define W 800
-#define H 480
 static GLfloat cube_v[36 * 8];
 static void build_cube(void) {
     static const float F[6][4] = {
@@ -547,6 +626,8 @@ int main(void) {
             }
         }
         if (frames % 60 == 0) hw_sample();
+        if (osso_display_blanking_pause && frames % 1500 == 0)
+            osso_display_blanking_pause(osso_ctx);
         double el = (t = now()) - t0;
         float fps = frames / el;
         float dt = (float)(t - last);
@@ -586,7 +667,6 @@ int main(void) {
         pglLoadIdentity();
         igui_newframe(dt);
         igui_build_ui(el, fps);
-        audio_frame();
         igui_render();
         if (!peglSwapBuffers(eglD, eglS))
             printf("SWAP FAIL err=%x frame=%d\n", peglGetError(), frames);

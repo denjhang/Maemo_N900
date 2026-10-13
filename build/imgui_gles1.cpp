@@ -5,6 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdint.h>
 
 extern "C" {
@@ -164,6 +165,8 @@ void igui_newframe(float dt) {
     ImGui::NewFrame();
 }
 
+double now_double(void) { return (double)time(NULL); }
+
 void igui_key_char(const char *utf8) {
     ImGui::GetIO().AddInputCharactersUTF8(utf8);
 }
@@ -242,6 +245,8 @@ extern char hw[8][96];
 extern int hw_n;
 extern void audio_toggle(int on);
 extern void vibra_ping(void);
+extern int audio_start(int seconds);
+double now_double();
 }
 static inline ImVec4 vec4f(float x, float y, float z, float w) { return ImVec4(x, y, z, w); }
 #define ImVec2_to_imvec_helper vec4f
@@ -389,9 +394,17 @@ void igui_build_ui(double t, float fps) {
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("AUDIO")) {
-            ImGui::Text("ALSA PCM: %s", audio_on ? "PLAYING 440Hz" : "idle");
-            if (ImGui::Button(audio_on ? "STOP TONE" : "PLAY TONE"))
-                audio_toggle(!audio_on);
+            extern double audio_deadline;
+            if (audio_on) {
+                int left = (int)(audio_deadline - now_double());
+                ImGui::Text("ALSA PCM: PLAYING 440Hz (%ds left)", left);
+            } else
+                ImGui::Text("ALSA PCM: idle");
+            if (ImGui::Button("PLAY 20s"))
+                audio_start(20);
+            ImGui::SameLine();
+            if (ImGui::Button("STOP"))
+                audio_toggle(0);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("VIBRA")) {
