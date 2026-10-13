@@ -93,6 +93,7 @@ static void upload_texture(ImTextureData *tex) {
 
 void imrun_minimize_by_title(const char *title);
 extern int ImGui_OpenPopupCount(void);   /* patched-core BACK support */
+extern int igui_desk_nav_index(void);
 extern void ImGui_CloseTopPopup(void);
 int igui_init(int w, int h, IGlfns *fns) {
     gl = *fns;
@@ -275,6 +276,7 @@ static ShellApp g_apps[] = {
 /* desktop edit mode: long-press an icon -> red X badges (uninstall) */
 static bool g_desk_edit = false;
 static char g_desk_filter[32] = ""; /* desktop keyboard app filter */
+static int g_desk_nav_sel = -1;   /* desktop manual nav selection */
 static bool g_win_move = false;        /* Ctrl+M: arrow-key window move mode */
 static float g_nudge_dx = 0, g_nudge_dy = 0;
 static int g_dyn_dead = -1;         /* index pending dlclose+rm at frame start */
@@ -317,6 +319,29 @@ void igui_key_char(const char *utf8) {
    XKB composes Fn+key into the charsym - so only modifiers need wiring. */
 void igui_special_key(unsigned ks, int down) {
     ImGuiIO &io = ImGui::GetIO();
+    /* desktop manual nav: arrows move the selection, Enter opens */
+    if (down && g_focus < 0 && !g_desk_edit) {
+        int total = NAPPS + g_dyn_n;
+        if (total > 0) {
+            if (g_desk_nav_sel < 0) g_desk_nav_sel = 0;
+            if (ks == 0xff51 && g_desk_nav_sel % 4 > 0) g_desk_nav_sel--;
+            else if (ks == 0xff53 && g_desk_nav_sel % 4 < 3 && g_desk_nav_sel + 1 < total) g_desk_nav_sel++;
+            else if (ks == 0xff52 && g_desk_nav_sel >= 4) g_desk_nav_sel -= 4;
+            else if (ks == 0xff54 && g_desk_nav_sel + 4 < total) g_desk_nav_sel += 4;
+            else if (ks == 0xff0d || ks == 0xff0a) {
+                if (g_desk_nav_sel < NAPPS) shell_focus(g_desk_nav_sel);
+                else {
+                    DynApp &da = g_dyn[g_desk_nav_sel - NAPPS];
+                    if (!da.ever) { da.cascade = true; da.ever = true; }
+                    da.open = true; da.mini = false; da.anim = 0; da.anim_t0 = now_double();
+                }
+                g_desk_nav_sel = -1;
+                return;
+            }
+        }
+        if (ks == 0xff51 || ks == 0xff52 || ks == 0xff53 || ks == 0xff54)
+            return; /* consumed by desktop nav */
+    }
     /* Ctrl+M move mode: arrows nudge the focused window (24px steps) */
     if (down && g_win_move && g_focus >= 0) {
         if (ks == 0xff51) { g_nudge_dx -= 24; return; }
@@ -519,6 +544,7 @@ static int g_cascade_seq = 0;         /* new windows stack from top-left */
 static bool g_uncollapse[16];  /* explicit open always un-collapses (stale
                                     ini Collapsed=1 made apps look dead) */
 static void shell_focus(int i) {
+    if (i < 0 || i >= NAPPS) return; /* out-of-range write = memory corruption */
     g_desk_filter[0] = 0;   /* any open action dismisses the filter */
     ShellApp &a = g_apps[i];
     if (i >= 0 && i < 16) g_uncollapse[i] = true;
@@ -532,7 +558,9 @@ static void shell_focus(int i) {
     a.anim = 0; a.anim_t0 = now_double();
 }
 /* ctrl+letter combos (X11 pump path; N900 ctrl = X keycode 37) */
+int igui_desk_nav_index(void) { return g_desk_nav_sel; }
 void igui_ctrl_combo(char c) {
+    printf("CTRL+%c (focus=%d)\n", c, g_focus); fflush(stdout);
     if (c == 'w' || c == 'W') { if (g_focus >= 0) shell_close(g_focus); }
     else if (c == 't' || c == 'T') { /* Ctrl+T: cycle focused window */
         int order[24], n = 0;
@@ -581,7 +609,7 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     if ((!a.open && !a.closing) || a.mini) return false;
     bool pushed_alpha = false;
     if (a.cascade) {
-        /* fresh open: cascade from top-left, never tiny (Windows style) */
+        /* first-ever open: cascade position + ALSO fades in (anim set by focus) */
         int n = g_cascade_seq++ % 6;
         a.cascade = false;
         ImVec2 cp = ImVec2(24 + n * 42, 20 + n * 34);
@@ -590,7 +618,8 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
         if (cp.y + cs.y > 424) cp.y = 424 - cs.y;
         ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
         ImGui::SetNextWindowSize(cs, ImGuiCond_Always);
-    } else if (a.closing) {
+    }
+    if (a.closing) {
         /* fade-OUT close: keep rendering until gone, then finalize */
         float t = (float)(now_double() - a.close_t0) / 0.5f;
         if (t >= 1.0f) {
@@ -647,7 +676,7 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     }
     if (pushed_alpha) ImGui::PopStyleVar();
     if (!shown) { ImGui::End(); ImGui::PopStyleColor(); if (!a.closing) shell_close(i); return false; }
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = i;
     /* minimize button inside the NATIVE title bar, left of the X */
     {
         ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
@@ -741,7 +770,7 @@ void igui_build_ui(double t, float fps) {
     if (!s_selftest) {
         s_selftest = true;
         if (access("/home/user/gopen", 0) == 0) {
-            shell_focus(0); shell_focus(2); shell_focus(3);
+            shell_focus(0);   /* bounds: NAPPS==2 now */
         }
     }
     /* dockspace host: fills the area ABOVE the 48px system bar so docked/
@@ -779,7 +808,8 @@ void igui_build_ui(double t, float fps) {
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | /* scrollbar allowed: vertical
                     scrolling desktop when apps exceed one screen */
-                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                 ImGuiWindowFlags_NoNav); /* desktop nav handled manually (grid) */
     /* desktop keyboard filter: type letters while on desktop to find apps */
     if (g_desk_filter[0]) {
         ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -814,7 +844,7 @@ void igui_build_ui(double t, float fps) {
             char hid[16];
             snprintf(hid, sizeof hid, "##desk%d", i);
             static double hold_t0[16] = {0};
-            if (ImGui::IsItemFocused() && !g_desk_edit) { /* keyboard nav highlight */
+            if (i == igui_desk_nav_index() && !g_desk_edit) { /* manual kb nav */
                 dl->AddRect(ImVec2(bx - 3, by - 3), ImVec2(bx + cellw - 11, by + cellh - 9),
                             IM_COL32(120, 220, 255, 255), 12.0f, 0, 3.5f);
             }
@@ -989,6 +1019,10 @@ void igui_build_ui(double t, float fps) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
                                       : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1)); /* held = green */
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
+            ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, mini ? 0.35f : 0.8f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f); /* never a naked text chip */
             char tag[48];
             snprintf(tag, sizeof tag, "%s##run%d", nm, i);
             /* chip_t0 states: 0=idle, >0=pressing(t0), -1=long-press fired */
@@ -1019,7 +1053,8 @@ void igui_build_ui(double t, float fps) {
             } else if (chip_t0[ci] > 0) {
                 chip_t0[ci] = 0;
             }
-            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(4);
             ImGui::SameLine();
         }
         /* right side: [thermo C] [battery %] [clock] - measured, evenly
@@ -1235,7 +1270,8 @@ void igui_build_ui(double t, float fps) {
             if (cp.y + 300 > 424) cp.y = 424 - 300;
             ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(420, 300), ImGuiCond_Always);
-        } else if (a.anim < 1.0f) {
+        }
+        if (!a.closing && a.anim < 1.0f) {
             float tt = (float)(now_double() - a.anim_t0) / 0.5f;
             if (tt >= 1.0f) a.anim = 1.0f;
             else {
@@ -1263,7 +1299,7 @@ void igui_build_ui(double t, float fps) {
         if (pushed_alpha) ImGui::PopStyleVar();
         if (shown) {
             a.frame(t);
-            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = NAPPS + di;
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = NAPPS + di;
         }
         ImGui::End();
         ImGui::PopStyleColor();

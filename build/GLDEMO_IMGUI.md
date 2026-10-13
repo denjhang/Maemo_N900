@@ -258,3 +258,12 @@
 - **键盘导航**（ImGui 原生 NavEnableKeyboard）：上下左右在控件间移动聚焦（按钮/滑杆/下拉/桌面图标），回车=激活/折叠/拖动调节；桌面图标键盘聚焦时画亮蓝粗边
 - **Ctrl+T**：在打开的窗口间循环切换聚焦
 - **Ctrl+M 重定义**：窗口移动模式（原最小化改由标题栏按钮/任务栏承担）——开启后光标键 24px 步进移动窗口，第一次移动自动解除停靠（核心导出 ImGui_GetWindowPosByName 支持按名取位置）
+
+## IMRUN v0.3.2（2026-10-14，五项 bug 修复）
+- 二进制 md5: bd7ed8a3e2b2bcf7ee094bdf25d09f15（/home/user/imrun/imrun）
+- **SYSTEM 闪退根因**：gopen 自测钩子残留旧索引 shell_focus(2)/(3)——系统应用只剩 2 个，越界写穿 g_apps 数组=内存破坏即崩；shell_focus 加边界保护，gopen 改开 app0（设备实测 SYSTEM 打开存活）
+- **淡入淡出真正生效**：级联打开（首次）原先完全跳过淡入分支——现在级联只管定位，任何打开（含首次）都走 0.5s 从全透到不透明的淡入
+- **Ctrl+W/T、BACK 失灵根因**：g_focus 焦点追踪用 ChildWindows 标志，停靠后焦点上报在 Root 窗口上→永远追踪失败→三个功能全指向 -1。改 RootAndChildWindows
+- **任务栏 chip 三态**：聚焦=蓝色 / 按住=绿色 / 常态=永远带 1px 边框（不再出现光秃秃的文字）
+- **桌面键盘导航改为手写网格逻辑**（左右±1/上下±4/回车打开，选中格亮蓝粗边）——ImGui 原生 nav 在自由布局的桌面上方向推算混乱（框卡死在 keys 上）
+- igui_ctrl_combo 加了 CTRL+x 日志（o.log 可查组合键是否到达 shell 层）
