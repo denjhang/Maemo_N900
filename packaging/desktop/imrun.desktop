@@ -1,0 +1,12 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=IMRUN
+Comment=ImGui runtime for N900 (bare X11+EGL+GLES1.1)
+Exec=/home/user/imrun
+Icon=imrun
+Terminal=false
+Categories=Development;Utility;
+X-HildonDesk-ShowInToolbar=true
+X-Osso-Type=application/x-executable

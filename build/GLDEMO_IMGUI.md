@@ -118,3 +118,11 @@
 - KEYS 面板显示 `ks=十六进制 keysym`——以后任何键失灵，屏幕上直接读 keysym，不用再猜
 
 - 二进制 md5: a45c9ab234124ae72409b7b261709bde；AUTOTEST 回归 6/6 干净
+
+## IMRUN 桌面集成（2026-10-13，运行时上桌面）
+- **定名 IMRUN**（ImGui RUNtime / "I'm run"）——应用名从此固定，图标不再改
+- 桌面入口：/usr/share/applications/hildon/imrun.desktop（Exec=/home/user/imrun，X-Osso-Type 同 SkyRaid/wgames 模式）
+- 图标（自绘，深色窗口+青色立方体，已定稿）：/usr/share/icons/hicolor/{48x48,64x64,124x124}/hildon/imrun.png，源文件 packaging/desktop/
+- 二进制：/home/user/imrun（=gldemo_imgui v11，md5 a45c9ab2）
+- 安装姿势：SFTP 三件套（desktop+icons+bin）→ `killall hildon-desktop` 重启桌面壳刷新图标（X 客户端不受影响）
+- 仓库资产：packaging/desktop/（imrun.desktop + 三尺寸 PNG + 二进制副本）
