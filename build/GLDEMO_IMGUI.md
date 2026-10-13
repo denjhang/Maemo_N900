@@ -296,3 +296,7 @@
 - **SYSTEM→SETTINGS，第一页更名 WALLPAPER**——壁纸设置入口显性化
 - **本地应用商店**：/home/user/imrun/repo/ 预置 7 个插件；APPMGR 新 STORE 页列出可装应用（含 [installed] 标记）；**卸载=移回仓库**（mv 而非 rm），STORE 一键重装——彻底可逆
 - **关窗后桌面图标高亮跳变根因**：键盘导航选中框（g_desk_nav_sel）残留，关窗焦点回桌面时旧框突然显现——任何窗口开关清空导航态，且高亮仅在按过方向键后显示（g_desk_nav_on）
+
+## IMRUN v0.4.3（2026-10-14，交互架构修正：移动只认标题栏）
+- 二进制 md5: 32f743a329e6d7061c3e3db0c55785b6（/home/user/imrun/imrun）
+- **ConfigWindowsMoveFromTitleBarOnly=true**：窗口移动只认标题栏拖拽（+Ctrl+M 方向键模式）——窗口内空白区域的拖动动作彻底让给触摸滚动（翻页），两者不再互相打架；这是 ImGui 原生开关，配合核心补丁 #3（空体拖拽=滚动）形成完整触摸交互模型

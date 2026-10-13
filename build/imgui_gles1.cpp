@@ -103,6 +103,9 @@ int igui_init(int w, int h, IGlfns *fns) {
     io.DisplaySize = ImVec2((float)w, (float)h);
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; /* arrows+Enter drive the UI */
+    /* ONLY the title bar drags/moves a window - empty-space drags are
+       reserved for touch scrolling (page turning), not window moving */
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; /* dynamic font sizes */
     io.MouseDragThreshold = 3.0f; /* touch: 6px default eats finger gestures */
     io.DeltaTime = 1.0f / 60.0f;
