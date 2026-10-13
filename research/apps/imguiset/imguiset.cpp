@@ -30,3 +30,10 @@ extern "C" void imapp_frame(double t) {
         wave[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
     ImGui::PlotLines("Wave", wave, 64, 0, "SGX load", 0.0f, 1.0f, ImVec2(360, 60));
 }
+
+extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
+    ImDrawList *dl = (ImDrawList *)dlv; ImU32 ac = IM_COL32(70,170,220,255), ln = IM_COL32(235,240,245,255);
+    dl->AddCircle(ImVec2(cx, cy), s * 0.8f, ln, 40, 3.0f);
+    dl->AddCircleFilled(ImVec2(cx, cy), s * 0.3f, ac);
+    for (int k = 0; k < 4; k++) { float a = k * 1.5708f; dl->AddLine(ImVec2(cx + cosf(a) * s * 0.55f, cy + sinf(a) * s * 0.55f), ImVec2(cx + cosf(a) * s, cy + sinf(a) * s), ac, 4.0f); }
+}

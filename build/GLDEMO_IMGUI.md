@@ -228,3 +228,9 @@
 - **全面模块化**：系统程序仅 3 个（SYSINFO / WALLPAP / APPMGR，不可卸载——图标层天然保护：卸载徽章只画给动态 APP），其余 6 个（SETTINGS/WIDGETS/TONEGEN/VIBRA/KEYS/FONTS）全部拆为独立 .so 模块（research/apps/<id>/，各 ~6KB），已部署 apps/ 目录；主程序新增导出 imrun_now()、imrun_font_cn/world/kr()；插件生命周期自理（tonegen 的 imapp_destroy 停音频、vibra 的停震动）
 - **整条标题栏解除停靠（第二次核心补丁）**：DockNodeUpdateTabBar 隐藏 tab 栏分支强制清除 HiddenTabBar——tab 条即完整标题栏，任意位置拖动即可解停靠（原版只留左上角小三角）
 - 实测：7 个插件（含 hello）全部在线（/proc maps 28 条），进程稳定
+
+## IMRUN Shell v27（2026-10-14，触摸滚动 + 插件图标标准）
+- 二进制 md5: af7d06905409bca63335025160089939（/home/user/imrun/imrun）
+- **核心补丁 #3：空白处触摸拖拽=滚动**（安卓式）——按下后无控件激活时，拖动直接滚动悬停窗口（ActiveId==MoveId 的空体点击也放行）；滚动条加粗到 20px + GrabMinSize 18px，指头能用
+- **插件图标标准落地**：`imapp_icon(dl,cx,cy,s)` 向量绘制导出，7 个插件各画各的（齿轮/滑杆/正弦/震动/键盘/圆环/笑脸），不导出回退默认立方体；IMAPP_SPEC 升 v0.2（导出函数表 + 宿主符号表 + 生命周期）
+- 实测 7 插件全在线（maps 28 条），进程稳定

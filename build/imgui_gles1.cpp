@@ -119,6 +119,8 @@ int igui_init(int w, int h, IGlfns *fns) {
         st.GrabRounding = 5.0f;
         st.PopupRounding = 6.0f;
         st.ScrollbarRounding = 8.0f;
+        st.ScrollbarSize = 20.0f;   /* finger-sized, resistive screen */
+        st.GrabMinSize = 18.0f;
         st.TabRounding = 6.0f;
         st.WindowBorderSize = 1.0f;
         st.FramePadding = ImVec2(10, 7);
@@ -219,6 +221,7 @@ struct DynApp {
     void (*frame)(double t);          /* required: draw ImGui content */
     int (*init)(void);                /* optional */
     void (*destroy)(void);            /* optional */
+    void (*icon)(void *dl, float cx, float cy, float s); /* optional: vector icon */
     bool open, mini, ever, cascade;
     float anim; double anim_t0;
 };
@@ -250,6 +253,7 @@ static void dyn_scan(void) {
         a.h = h; a.frame = frame;
         a.init = (int (*)(void))dlsym(h, "imapp_init");
         a.destroy = (void (*)(void))dlsym(h, "imapp_destroy");
+        a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
         a.open = a.mini = a.ever = a.cascade = false;
         a.anim = 1; a.anim_t0 = 0;
         if (a.init) a.init();
@@ -693,8 +697,12 @@ void igui_build_ui(double t, float fps) {
             dl->AddRect(p0, p1,
                         on ? IM_COL32(90, 200, 240, 220) : IM_COL32(255, 255, 255, 45),
                         10.0f, 0, hot ? 2.5f : 1.5f);
-            shell_draw_icon(dyn ? -1 : i, ImVec2(bx + (cellw - 14) * 0.5f, by + 34), 17.0f,
-                            dyn ? IM_COL32(160, 120, 220, 255) : g_app_accent[i]);
+            if (dyn && g_dyn[di].icon)
+                g_dyn[di].icon(ImGui::GetWindowDrawList(),
+                               bx + (cellw - 14) * 0.5f, by + 34, 17.0f);
+            else
+                shell_draw_icon(dyn ? -1 : i, ImVec2(bx + (cellw - 14) * 0.5f, by + 34), 17.0f,
+                                dyn ? IM_COL32(160, 120, 220, 255) : g_app_accent[i]);
             char label[40];
             snprintf(label, sizeof label, "%s%s", nm, on ? " *" : "");
             ImVec2 ts = ImGui::CalcTextSize(label);

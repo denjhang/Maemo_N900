@@ -5562,6 +5562,24 @@ void ImGui::UpdateMouseMovingWindowEndFrame()
         }
     }
 
+    // IMRUN patch #3: touch drag on empty background scrolls the hovered
+    // window (Android-style). The resistive screen has no wheel; the grab
+    // scrollbar is too small for a finger. Only when no widget is active and
+    // the touch didn't latch onto a window move (empty-body clicks keep
+    // ActiveId == MoveId with MovingWindow == NULL - allow those).
+    if (g.IO.MouseDown[0] && g.MovingWindow == NULL && g.HoveredId == 0 &&
+        (g.IO.MouseDelta.x != 0.0f || g.IO.MouseDelta.y != 0.0f))
+    {
+        ImGuiWindow* sw = g.HoveredWindow;
+        if (sw != NULL && (g.ActiveId == 0 || g.ActiveId == sw->RootWindow->MoveId))
+        {
+            if (sw->ScrollMax.y > 0.0f)
+                sw->Scroll.y = ImClamp(sw->Scroll.y - g.IO.MouseDelta.y, 0.0f, sw->ScrollMax.y);
+            if (sw->ScrollMax.x > 0.0f)
+                sw->Scroll.x = ImClamp(sw->Scroll.x - g.IO.MouseDelta.x, 0.0f, sw->ScrollMax.x);
+        }
+    }
+
     // With right mouse button we close popups without changing focus based on where the mouse is aimed
     // Instead, focus will be restored to the window under the bottom-most closed popup.
     // (The left mouse button path calls FocusWindow on the hovered window, which will lead NewFrame->ClosePopupsOverWindow to trigger)

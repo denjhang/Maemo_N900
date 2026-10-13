@@ -28,3 +28,9 @@ extern "C" void imapp_frame(double t) {
     ImGui::Combo("WAVE", &audio_wave, waves, 4);
     ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
 }
+
+extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
+    ImDrawList *dl = (ImDrawList *)dlv; ImU32 ac = IM_COL32(90,220,140,255);
+    ImVec2 p = ImVec2(cx - s, cy);
+    for (int k = 1; k <= 24; k++) { float x = cx - s + 2 * s * k / 24.0f, y = cy - sinf(k * 0.4f) * s * 0.55f; dl->AddLine(p, ImVec2(x, y), ac, 3.5f); p = ImVec2(x, y); }
+}

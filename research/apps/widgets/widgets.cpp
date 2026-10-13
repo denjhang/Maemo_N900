@@ -24,3 +24,8 @@ extern "C" void imapp_frame(double t) {
         load[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
     ImGui::PlotLines("LOAD", load, 64, 0, NULL, 0.0f, 1.0f, ImVec2(320, 50));
 }
+
+extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
+    ImDrawList *dl = (ImDrawList *)dlv; ImU32 ac = IM_COL32(230,170,60,255), ln = IM_COL32(235,240,245,255);
+    for (int k = 0; k < 3; k++) { float y = cy - s * 0.5f + k * s * 0.5f; dl->AddLine(ImVec2(cx - s, y), ImVec2(cx + s, y), ln, 3.0f); dl->AddCircleFilled(ImVec2(cx - s * 0.4f + k * s * 0.55f, y), s * 0.16f, ac); }
+}

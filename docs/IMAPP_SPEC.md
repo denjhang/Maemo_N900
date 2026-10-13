@@ -96,3 +96,37 @@ typedef struct {
 
 format=1 的 ABI 函数表只增不改：新函数追加尾部，运行时按 APP 编译时的
 format 值裁剪。图标、id、manifest 键名一经发布不改名（IMRUN 图标同规）。
+
+---
+
+# v0.2 增补（2026-10-14，实装后修订：插件模块标准）
+
+热加载已实装（dlopen + --export-dynamic 符号解析），标准按实际落地修订：
+
+## 模块目录标准（/home/user/imrun/apps/<id>/）
+```
+<id>/                 目录名 = app id（snake_case）
+  app.so              必有。ARM ELF shared（-shared -fPIC -nostdlib）
+  icon.png            可选（48x48，显示层未来支持）；向量图标优先见下
+  manifest.ini        可选（name/version/author；缺省用 imapp_name()）
+```
+
+## app.so 导出函数标准
+| 导出 | 必需性 | 签名 | 说明 |
+|---|---|---|---|
+| imapp_frame | **必需** | `void imapp_frame(double t)` | 每帧画 ImGui 内容（窗口本体由 shell 提供）；t = 相对秒 |
+| imapp_name | 推荐 | `const char* imapp_name(void)` | 显示名；缺省用目录名 |
+| imapp_icon | 推荐 | `void imapp_icon(void* dl, float cx, float cy, float s)` | **桌面图标（向量绘制）**：dl 是 ImDrawList*，以 (cx,cy) 为中心、s 为半径画；不导出则回退默认立方体（不推荐，千篇一律） |
+| imapp_init | 可选 | `int imapp_init(void)` | 加载时调用一次 |
+| imapp_destroy | 可选 | `void imapp_destroy(void)` | 卸载/窗口关闭时调用——**释放资源（停音频/震动）的唯一钩子** |
+
+## 宿主供给（可直接引用的符号，从主程序解析）
+- 全部 ImGui 符号（Begin/Text/Button/...）
+- `audio_ui_start/audio_ui_stop/audio_on/audio_deadline/audio_volume/audio_wave`
+- `vibra_ping/vibra_stop`、`imrun_now()`（相对时钟，禁止自己取 epoch）
+- `imrun_font_cn/world/kr()`（字体句柄）、`last_key[]`（按键记录）
+
+## 生命周期
+- 安装 = 放入 apps/（2s 内热加载）；卸载 = 长按桌面图标红叉 / APPMGR（dlclose + 删目录）
+- 窗口关闭 = destroy() 调用；最小化 = 保活
+- 系统程序（SYSINFO/WALLPAP/APPMGR）内建不可卸载
