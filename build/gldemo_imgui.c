@@ -69,12 +69,19 @@ static int (*snd_pcm_close)(snd_pcm_t *);
 static int (*snd_pcm_prepare)(snd_pcm_t *);
 static snd_pcm_t *pcm;
 int audio_on;
+int audio_amp = 16000;
+int dbg_underruns = 0;
 static float audio_phase;
 double audio_deadline = 0;
+double dbg_max_stall = 0;
+int dbg_stalls = 0;
 static void *hPTHREAD;
 static int (*pthread_create_fn)(unsigned long *, void *, void *(*)(void *), void *);
 static int (*pthread_join_fn)(unsigned long, void **);
 static int (*usleep_fn)(unsigned int);
+static int (*sched_setscheduler_fn)(int, int, void *);
+static int (*setgid_fn)(unsigned int);
+static int (*setuid_fn)(unsigned int);
 static void *hOSSO;
 static void *osso_ctx;
 static void *(*osso_initialize)(const char *, const char *, int, void *);
@@ -411,8 +418,12 @@ extern void igui_mouse_pos(float x, float y);
 extern void igui_mouse_btn(int btn, int down);
 extern void igui_key_char(const char *utf8);
 extern double audio_deadline;
+extern double dbg_max_stall;
+extern int dbg_stalls;
 extern int audio_start(int seconds);
 extern void vibra_ping(void);
+extern void ui_stress_toggle(void);
+
 extern void igui_key_char(const char *utf8);
 
 static void hw_sample(void) {
@@ -471,9 +482,10 @@ void vibra_ping(void) {
 void audio_toggle(int on) {
     if (!snd_pcm_open) return;
     if (on && !pcm) {
-        if (snd_pcm_open(&pcm, "default", 0 /*PLAYBACK*/, 0) == 0) {
+        if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
+            printf("AUDIO: direct hw plughw:0,0 (pulse bypass)\n");
             /* S16_LE=2, RW_INTERLEAVED=3, 2ch, 44100Hz, 500ms buffer */
-            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 500000);
+            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 1000000);
         } else pcm = NULL;
     } else if (!on && pcm) {
         snd_pcm_close(pcm);
@@ -490,18 +502,30 @@ static void *audio_writer(void *arg) {
     /* generator lives IN the writer thread: UI can stall forever,
        audio never notices (deadbeef output-thread pattern) */
     while (thread_run) {
+        double t_before = now();
         if (audio_deadline && now() > audio_deadline)
             break;
         for (unsigned i = 0; i < PERIOD; i++) {
-            short s = (short)(sinf(audio_phase) * 16000);
+            short s = (short)(sinf(audio_phase) * audio_amp);
             chunk[i * 2] = s;
             chunk[i * 2 + 1] = s;
             audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
         }
         long w = snd_pcm_writei(pcm, chunk, PERIOD);
+        long done = 0;
+        while (w > 0 && done + w < PERIOD) {
+            done += w; /* partial write: push the rest, else lost frames = crackle */
+            w = snd_pcm_writei(pcm, chunk + done * 2, PERIOD - done);
+        }
         if (w < 0 && snd_pcm_prepare) {
             snd_pcm_prepare(pcm);
             w = snd_pcm_writei(pcm, chunk, PERIOD);
+            if (w < 0) dbg_underruns++;
+        }
+        {
+            double stall = now() - t_before; /* one period = ~46ms nominal */
+            if (stall > dbg_max_stall) dbg_max_stall = stall;
+            if (stall > 0.1) dbg_stalls++;
         }
     }
     return NULL;
@@ -509,7 +533,7 @@ static void *audio_writer(void *arg) {
 
 int audio_start(int seconds) {
     if (!snd_pcm_open || !pthread_create_fn) return 0;
-    audio_toggle(0);
+    if (thread_run) audio_stop_full(); /* never close PCM under a live thread */
     audio_toggle(1);
     if (!audio_on) return 0;
     audio_phase = 0;
@@ -523,12 +547,18 @@ int audio_start(int seconds) {
     return 1;
 }
 
-static void audio_stop_full(void) {
+void audio_stop_full(void) {
     if (thread_run) {
+        double t0 = now();
         thread_run = 0;
         if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
+        printf("AUDIO stop: writer joined in %.3fs\n", now() - t0);
     }
-    audio_toggle(0);
+    if (pcm) {
+        printf("AUDIO stop: closing PCM\n");
+        audio_toggle(0);
+        printf("AUDIO stop: PCM closed\n");
+    }
     audio_deadline = 0;
 }
 
@@ -561,6 +591,24 @@ static void build_cube(void) {
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    /* real-time audio pattern: start as root with SCHED_RR, then drop to
+       'user' (uid 29999) before opening X/audio. RT policy is inherited by
+       the audio writer thread created later. */
+    if (geteuid() == 0) {
+        void *libc = dlopen("libc.so.6", RTLD_NOW);
+        if (libc) {
+            sched_setscheduler_fn = dlsym(libc, "sched_setscheduler");
+            setgid_fn = dlsym(libc, "setgid");
+            setuid_fn = dlsym(libc, "setuid");
+        }
+        if (sched_setscheduler_fn) {
+            struct { int sched_priority; } sp = { 15 };
+            sched_setscheduler_fn(0, 2 /*SCHED_RR*/, &sp);
+        }
+        if (setgid_fn) setgid_fn(29999);
+        if (setuid_fn) setuid_fn(29999);
+        printf("privdrop uid=%d\n", (int)getuid());
+    }
     if (init_gfx(W, H)) return 1;
     build_cube();
     IGlfns fns;
@@ -588,6 +636,9 @@ int main(void) {
     if (igui_init(W, H, &fns)) return 1;
     printf("imgui init OK\n");
 
+    int avtest = getenv("AVTEST") != NULL;
+    double av_t0 = 0;
+    int av_started = 0;
     double t0 = now(), t, last = t0;
     int frames = 0;
     double last_report = t0;
@@ -625,10 +676,23 @@ int main(void) {
                 }
             }
         }
+        if (frames % 300 == 0) {
+            unsigned gerr = pglGetError();
+            printf("AUDIODBG max_stall=%.3fs stalls=%d underruns=%d\n", dbg_max_stall, dbg_stalls, dbg_underruns);
+        }
         if (frames % 60 == 0) hw_sample();
         if (osso_display_blanking_pause && frames % 1500 == 0)
             osso_display_blanking_pause(osso_ctx);
         double el = (t = now()) - t0;
+        if (avtest && !av_started && el > 2.5) {
+            audio_amp = 2500; /* quiet: don't disturb the human */
+            audio_start(20);
+            av_started = 1;
+            av_t0 = el;
+            printf("AVTEST tone started (amp=%d)\n", audio_amp);
+        }
+        if (avtest && av_started && el - av_t0 < 15 && frames % 45 == 0)
+            ui_stress_toggle(); /* heavy: force glyph rebake every ~0.7s */
         float fps = frames / el;
         float dt = (float)(t - last);
         if (dt > 0.25f || dt <= 0) dt = 0.033f;

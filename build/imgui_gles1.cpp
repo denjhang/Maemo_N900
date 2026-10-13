@@ -167,6 +167,13 @@ void igui_newframe(float dt) {
 
 double now_double(void) { return (double)time(NULL); }
 
+void ui_stress_toggle(void) {
+    ImGuiStyle &st = ImGui::GetStyle();
+    static float v = 1.0f;
+    v = (v > 1.1f) ? 1.0f : 1.35f;
+    st.FontScaleMain = v; /* forces full glyph rebake = heaviest UI op */
+}
+
 void igui_key_char(const char *utf8) {
     ImGui::GetIO().AddInputCharactersUTF8(utf8);
 }
@@ -244,6 +251,7 @@ extern char last_key[64];
 extern char hw[8][96];
 extern int hw_n;
 extern void audio_toggle(int on);
+extern void audio_stop_full(void);
 extern void vibra_ping(void);
 extern int audio_start(int seconds);
 double now_double();
@@ -404,7 +412,7 @@ void igui_build_ui(double t, float fps) {
                 audio_start(20);
             ImGui::SameLine();
             if (ImGui::Button("STOP"))
-                audio_toggle(0);
+                audio_stop_full(); /* join writer thread BEFORE closing PCM */
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("VIBRA")) {

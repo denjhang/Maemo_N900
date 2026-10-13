@@ -31,3 +31,30 @@
 ## 验收记录（2026-10-13）
 - 全屏 800x480、背景立方体旋转、两个 ImGui 窗口渲染、触摸拖动/点击、停靠/解停靠、拖 dock 分隔线调整大小——全部可用，~62 FPS（vsync 封顶），零 GL 错误
 - 分隔线拖不动的解法：`io.MouseDragThreshold` 6px → 3px（触摸手指抖动大，默认阈值会把手势吞成点击），一处一行，立竿见影
+
+## 音频 Saga 完整记录（2026-10-13，五版演进，最终根治）
+
+**最终架构**：`AVTEST=1` 环境变量自测模式 + root 启动 → `sched_setscheduler(SCHED_RR,15)` → `setuid(29999)` 降权（RT 策略被音频线程继承）→ dlopen libasound → **`plughw:0,0` 直连硬件（绕过 PulseAudio）** → 独立写线程（pthread dlopen）自生成自写入，主循环零参与 → `audio_stop_full()` 先 join 线程再关 PCM（关序错误=闪退）。
+
+**五版演进与数据**（AVTEST 压力：每 0.7s 强制 imgui 字体重烘焙 = 最重 UI 负载）：
+1. 主循环直写 PCM（100ms 缓冲）：半秒即死——UI 卡一帧就断
+2. 写线程 + 32768 帧环形缓冲（主循环生产）：UI 一卡断供 0.74s 缓冲
+3. 写线程内嵌生成器（主循环零参与）+ 500ms ALSA 缓冲：仍断——`max_stall=0.349s × 26 次`
+4. root 启动 SCHED_RR + 降权 + 1s 缓冲：仍断——`max_stall=0.477s × 69 次`
+5. **plughw:0,0 绕过 pulse：根治——`max_stall=0.064s`（正常阻塞），饥饿 0 次**
+
+**根因**：N900 的 PulseAudio 是 --system 模式守护进程，自己普通优先级。RT 写线程把数据交给 pulse 后，pulse 被主线程 GPU/字体负载挤兑，缓冲断供。RT 救不了别人家的进程——绕开它直连内核才是唯一解。
+
+**其它已修**：
+- 咔咔爆音 = snd_pcm_writei 部分写入未续写（丢帧即爆音）→ while 循环补写余量
+- STOP 闪退 = glue 直接 audio_toggle(0) 关 PCM 而写线程还活着（use-after-free）→ STOP 走 audio_stop_full()（先 join 再 close），audio_start 先全停再开防竞态
+- 音量小（正弦 2500/16000 幅度 + hw 音量）：待加软件音量条（下一版）
+
+**参考实现结论**（vgmplay-maemo 亲手验证不卡的原因）：libao→pulse 阻塞写 + console UI 零重负载——它能用 pulse 是因为它没有 GPU 字体烘焙；我们这种重 GPU 应用在 N900 上必须绕开 pulse。pps2emu/deadbeef 等 SDL/default 派同理只在轻 UI 下成立。
+
+**运行姿势**（三种都支持）：
+- root 直接跑：`DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:abstract=/tmp/dbus-XXX ./gldemo_imgui`（推荐，自动 RT+降权；地址从 `cat /home/user/.dbus/session-bus/*` 拿）
+- su user 跑：无 RT，音频仍可用（plughw 不需要 pulse 权限）
+- AVTEST=1：3 秒后自动 20 秒低音量测试音 + 周期性 UI 压力
+
+## 已知待修
