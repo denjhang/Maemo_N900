@@ -97,3 +97,8 @@
 - 顺带：vibra_ping/vibra_stop 的 system()（fork+exec dbus-send）挪到一次性线程——fork 在 UI 线程同样是阻塞点；附带修正 vibra 时长 ms/1000 截断（100ms 休眠变 sleep 0）
 - AUTOTEST 回归：6/6 循环零 XRUN 零 -EPIPE（audio_dbg5.log），v9 音频行为无回退
 - **此版本为 UI 响应性基线：UI 线程音频/震动路径耗时必须为 0（只允许置标志）**
+
+### v10 里程碑验收（2026-10-13，用户暴力测试通过）
+- 用户实测：播放中连点 PLAY/STOP 一百次，UI 完全不卡，触摸震动全程跟手——**里程碑通过**
+- 发布包: research/releases/gldemo_imgui_release_v10.tar.gz（源码+二进制+构建/部署脚本+文档+imgui 核心）
+- v10 = 音频(v9 基线) + UI 零阻塞 双基线版本
