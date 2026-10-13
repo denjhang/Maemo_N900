@@ -137,3 +137,11 @@
 - 实现注：sysfs 读数用 fgets+atoi（fscanf 被 gcc11 重定向成 __isoc99_fscanf，无 shim）
 - AUTOTEST 回归 6/6 干净，音频基线无回退
 - **v12a 修正**：右下角电量/温度真数据源（设备实测）——CPU 温度 `/sys/class/hwmon/hwmon0/device/temp1_input`（omap34xx_temp，裸摄氏度非毫度）；电量 Fremantle 无 sysfs（bq27200 归 BME 守护进程独占）→ 后台线程 30s 调 `hal-get-property --udi .../bme --key battery.charge_level.percentage`（fork 永不进 UI 线程）。md5 e98064688a51089ecd556f779abe4989
+
+## IMRUN Shell v14（2026-10-13，桌面美化 + 最小化）
+- 二进制 md5: 62c90c3c55843e17c33917922e857596（/home/user/imrun）
+- **桌面半透明（alpha 0.42）**：背景 3D 方块动画直接当壁纸，磨砂卡片网格悬浮其上
+- **每个 APP 手绘矢量图标**（ImDrawList 程序化绘制，零纹理）：IMGUI=立方体、WIDGETS=滑块组、TONEGEN=正弦波、VIBRA=手机+震动弧、KEYS=键盘点阵、FONTS=环形、SYSINFO=芯片引脚；每 APP 独立强调色，图标+文字标签一体的磨砂卡片（按下/悬停有反馈，运行中蓝边+"*"，最小化"-"）
+- **窗口最小化**：每个窗口 MINIMIZE (Ctrl+M) + CLOSE (Ctrl+W) 双按钮；标题栏 X 仍可关；**HOME 圆圈 = 最小化全部**（安卓语义）；任务栏图标点击 = 最小化时恢复/前台时再按最小化
+- **系统栏美化**：BACK/HOME 改为纯图标绘制（左三角/圆环，桌面态圆环高亮蓝），右下角 温度计+温度 / 电池描边+电量填充条(绿/橙/红)+百分比 / 表盘+时间，全部 drawlist 矢量 + 垂直居中
+- **全局配色打磨**：8px 圆角全套、深蓝灰配色、标题栏/按钮/滑块统一强调色
