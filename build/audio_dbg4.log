@@ -1,0 +1,232 @@
+[4294967.295] R resetup hsz=604 ssz=104
+[     0.000] === AUTOTEST begin pcm_open=OK amp=16000 ===
+[     0.000] --- cycle 0: PLAY ---
+[     0.000] S START req=30s state=2 avail=32768 was_run=0
+[     0.001] S prepare=0 avail_after=32768 state=2
+[     0.001] S spawned
+[     0.002] T spawn tid=0
+[     0.003] T silence pad z1=2048 z2=2048 state=3
+[     0.006] T seq=0 w=2048 gen+write=3.1ms avail=27136 state=3
+[     0.006] T FIRST-WRITE latency=1.0ms
+[     0.018] T seq=1 w=2048 gen+write=11.3ms avail=25088 state=3
+[     0.040] T seq=2 w=2048 gen+write=21.8ms avail=24064 state=3
+[     0.061] T seq=3 w=2048 gen+write=21.8ms avail=23040 state=3
+[     0.083] T seq=4 w=2048 gen+write=21.8ms avail=22016 state=3
+[     0.105] T seq=5 w=2048 gen+write=21.9ms avail=20992 state=3
+[     0.127] T seq=6 w=2048 gen+write=21.8ms avail=19968 state=3
+[     0.149] T seq=7 w=2048 gen+write=21.9ms avail=18944 state=3
+[     0.171] T seq=8 w=2048 gen+write=22.0ms avail=17408 state=3
+[     0.194] T seq=9 w=2048 gen+write=22.0ms avail=16384 state=3
+[     0.216] T seq=10 w=2048 gen+write=22.0ms avail=15360 state=3
+[     0.238] T seq=11 w=2048 gen+write=22.0ms avail=14336 state=3
+[     0.260] T seq=12 w=2048 gen+write=22.0ms avail=13312 state=3
+[     0.282] T seq=13 w=2048 gen+write=22.0ms avail=12288 state=3
+[     0.304] T seq=14 w=2048 gen+write=22.0ms avail=11264 state=3
+[     0.326] T seq=15 w=2048 gen+write=22.0ms avail=10240 state=3
+[     0.349] T seq=16 w=2048 gen+write=22.3ms avail=9216 state=3
+[     0.371] T seq=17 w=2048 gen+write=22.3ms avail=8192 state=3
+[     0.394] T seq=18 w=2048 gen+write=22.3ms avail=7168 state=3
+[     0.416] T seq=19 w=2048 gen+write=22.3ms avail=5632 state=3
+[     0.438] T seq=20 w=2048 gen+write=22.3ms avail=4608 state=3
+[     0.461] T seq=21 w=2048 gen+write=22.3ms avail=3584 state=3
+[     0.483] T seq=22 w=2048 gen+write=22.3ms avail=2560 state=3
+[     0.506] T seq=23 w=2048 gen+write=22.3ms avail=1536 state=3
+[     0.528] T seq=24 w=2048 gen+write=22.3ms avail=512 state=3
+[     0.551] --- cycle 0: STOP ---
+[     0.551] P STOP entry run=1 state=3 avail=1536
+[     0.556] T seq=25 w=2048 gen+write=27.4ms avail=1536 state=3
+[     0.558] T exit seq=26
+[     0.558] P joined in 7.5ms
+[     0.558] R resetup hsz=604 ssz=104
+[     0.567] P dropped+resetup(er=0) after 16.2ms state=2
+[     0.717] --- cycle 1: PLAY ---
+[     0.718] S START req=30s state=2 avail=32768 was_run=0
+[     0.719] S prepare=0 avail_after=32768 state=2
+[     0.719] S spawned
+[     0.719] T spawn tid=0
+[     0.720] T silence pad z1=2048 z2=2048 state=3
+[     0.723] T seq=0 w=2048 gen+write=3.1ms avail=27136 state=3
+[     0.723] T FIRST-WRITE latency=0.9ms
+[     0.735] T seq=1 w=2048 gen+write=11.3ms avail=25600 state=3
+[     0.757] T seq=2 w=2048 gen+write=21.8ms avail=24576 state=3
+[     0.779] T seq=3 w=2048 gen+write=21.8ms avail=23552 state=3
+[     0.801] T seq=4 w=2048 gen+write=21.9ms avail=22528 state=3
+[     0.823] T seq=5 w=2048 gen+write=21.9ms avail=21504 state=3
+[     0.845] T seq=6 w=2048 gen+write=21.9ms avail=20480 state=3
+[     0.867] T seq=7 w=2048 gen+write=21.9ms avail=18944 state=3
+[     0.889] T seq=8 w=2048 gen+write=22.0ms avail=17920 state=3
+[     0.911] T seq=9 w=2048 gen+write=22.0ms avail=16896 state=3
+[     0.933] T seq=10 w=2048 gen+write=22.0ms avail=15872 state=3
+[     0.955] T seq=11 w=2048 gen+write=22.0ms avail=14848 state=3
+[     0.977] T seq=12 w=2048 gen+write=22.0ms avail=13824 state=3
+[     0.999] T seq=13 w=2048 gen+write=22.0ms avail=12800 state=3
+[     1.021] T seq=14 w=2048 gen+write=22.0ms avail=11776 state=3
+[     1.044] T seq=15 w=2048 gen+write=22.0ms avail=10752 state=3
+[     1.066] T seq=16 w=2048 gen+write=22.3ms avail=9728 state=3
+[     1.088] T seq=17 w=2048 gen+write=22.3ms avail=8704 state=3
+[     1.111] T seq=18 w=2048 gen+write=22.3ms avail=7168 state=3
+[     1.133] T seq=19 w=2048 gen+write=22.3ms avail=6144 state=3
+[     1.156] T seq=20 w=2048 gen+write=22.3ms avail=5120 state=3
+[     1.178] T seq=21 w=2048 gen+write=22.3ms avail=4096 state=3
+[     1.201] T seq=22 w=2048 gen+write=22.3ms avail=3072 state=3
+[     1.223] T seq=23 w=2048 gen+write=22.3ms avail=2048 state=3
+[     1.246] T seq=24 w=2048 gen+write=22.3ms avail=1024 state=3
+[     1.268] T seq=25 w=2048 gen+write=22.3ms avail=0 state=3
+[     1.290] --- cycle 1: STOP ---
+[     1.291] P STOP entry run=1 state=3 avail=1024
+[     1.297] T seq=26 w=2048 gen+write=29.1ms avail=512 state=3
+[     1.298] T exit seq=27
+[     1.298] P joined in 7.2ms
+[     1.298] R resetup hsz=604 ssz=104
+[     1.307] P dropped+resetup(er=0) after 16.0ms state=2
+[     1.457] --- cycle 2: PLAY ---
+[     1.457] S START req=30s state=2 avail=32768 was_run=0
+[     1.459] S prepare=0 avail_after=32768 state=2
+[     1.459] S spawned
+[     1.459] T spawn tid=0
+[     1.460] T silence pad z1=2048 z2=2048 state=3
+[     1.463] T seq=0 w=2048 gen+write=3.1ms avail=27136 state=3
+[     1.463] T FIRST-WRITE latency=0.9ms
+[     1.475] T seq=1 w=2048 gen+write=11.4ms avail=25600 state=3
+[     1.497] T seq=2 w=2048 gen+write=21.8ms avail=24576 state=3
+[     1.518] T seq=3 w=2048 gen+write=21.8ms avail=23552 state=3
+[     1.540] T seq=4 w=2048 gen+write=21.8ms avail=22528 state=3
+[     1.562] T seq=5 w=2048 gen+write=21.9ms avail=21504 state=3
+[     1.584] T seq=6 w=2048 gen+write=21.9ms avail=20480 state=3
+[     1.606] T seq=7 w=2048 gen+write=21.9ms avail=18944 state=3
+[     1.629] T seq=8 w=2048 gen+write=22.0ms avail=17920 state=3
+[     1.651] T seq=9 w=2048 gen+write=22.0ms avail=16896 state=3
+[     1.673] T seq=10 w=2048 gen+write=22.0ms avail=15872 state=3
+[     1.695] T seq=11 w=2048 gen+write=22.0ms avail=14848 state=3
+[     1.717] T seq=12 w=2048 gen+write=22.0ms avail=13824 state=3
+[     1.739] T seq=13 w=2048 gen+write=22.0ms avail=12800 state=3
+[     1.761] T seq=14 w=2048 gen+write=22.0ms avail=11776 state=3
+[     1.783] T seq=15 w=2048 gen+write=22.0ms avail=10752 state=3
+[     1.806] T seq=16 w=2048 gen+write=22.3ms avail=9728 state=3
+[     1.828] T seq=17 w=2048 gen+write=22.3ms avail=8704 state=3
+[     1.851] T seq=18 w=2048 gen+write=22.3ms avail=7168 state=3
+[     1.873] T seq=19 w=2048 gen+write=22.3ms avail=6144 state=3
+[     1.896] T seq=20 w=2048 gen+write=22.3ms avail=5120 state=3
+[     1.918] T seq=21 w=2048 gen+write=22.3ms avail=4096 state=3
+[     1.940] T seq=22 w=2048 gen+write=22.3ms avail=3072 state=3
+[     1.963] T seq=23 w=2048 gen+write=22.3ms avail=2048 state=3
+[     1.985] T seq=24 w=2048 gen+write=22.3ms avail=1024 state=3
+[     2.008] T seq=25 w=2048 gen+write=22.3ms avail=0 state=3
+[     2.030] --- cycle 2: STOP ---
+[     2.030] P STOP entry run=1 state=3 avail=1024
+[     2.037] T seq=26 w=2048 gen+write=29.4ms avail=512 state=3
+[     2.040] T exit seq=27
+[     2.040] P joined in 10.3ms
+[     2.041] R resetup hsz=604 ssz=104
+[     2.051] P dropped+resetup(er=0) after 20.6ms state=2
+[     2.201] --- cycle 3: PLAY ---
+[     2.202] S START req=30s state=2 avail=32768 was_run=0
+[     2.203] S prepare=0 avail_after=32768 state=2
+[     2.203] S spawned
+[     2.204] T spawn tid=0
+[     2.204] T silence pad z1=2048 z2=2048 state=3
+[     2.208] T seq=0 w=2048 gen+write=3.7ms avail=27136 state=3
+[     2.208] T FIRST-WRITE latency=0.9ms
+[     2.222] T seq=1 w=2048 gen+write=13.6ms avail=25600 state=3
+[     2.248] T seq=2 w=2048 gen+write=26.2ms avail=25088 state=3
+[     2.275] T seq=3 w=2048 gen+write=26.1ms avail=24064 state=3
+[     2.301] T seq=4 w=2048 gen+write=26.2ms avail=23040 state=3
+[     2.327] T seq=5 w=2048 gen+write=26.2ms avail=22016 state=3
+[     2.354] T seq=6 w=2048 gen+write=26.2ms avail=21504 state=3
+[     2.380] T seq=7 w=2048 gen+write=26.2ms avail=20480 state=3
+[     2.407] T seq=8 w=2048 gen+write=26.4ms avail=19456 state=3
+[     2.433] T seq=9 w=2048 gen+write=26.4ms avail=18944 state=3
+[     2.460] T seq=10 w=2048 gen+write=26.4ms avail=17920 state=3
+[     2.486] T seq=11 w=2048 gen+write=26.4ms avail=16896 state=3
+[     2.513] T seq=12 w=2048 gen+write=26.4ms avail=15872 state=3
+[     2.539] T seq=13 w=2048 gen+write=26.4ms avail=15360 state=3
+[     2.566] T seq=14 w=2048 gen+write=26.4ms avail=14336 state=3
+[     2.593] T seq=15 w=2048 gen+write=26.4ms avail=13312 state=3
+[     2.620] T seq=16 w=2048 gen+write=26.8ms avail=12800 state=3
+[     2.647] T seq=17 w=2048 gen+write=26.8ms avail=11776 state=3
+[     2.674] T seq=18 w=2048 gen+write=26.8ms avail=10752 state=3
+[     2.701] T seq=19 w=2048 gen+write=26.8ms avail=10240 state=3
+[     2.727] T seq=20 w=2048 gen+write=26.8ms avail=9216 state=3
+[     2.754] T seq=21 w=2048 gen+write=26.8ms avail=8192 state=3
+[     2.781] T seq=22 w=2048 gen+write=26.7ms avail=7168 state=3
+[     2.808] T seq=23 w=2048 gen+write=26.8ms avail=6656 state=3
+[     2.835] T seq=24 w=2048 gen+write=26.7ms avail=5632 state=3
+[     2.862] T seq=25 w=2048 gen+write=26.8ms avail=4608 state=3
+[     2.889] T seq=26 w=2048 gen+write=26.8ms avail=4096 state=3
+[     2.909] --- cycle 3: STOP ---
+[     2.909] P STOP entry run=1 state=3 avail=4608
+[     2.916] T seq=27 w=2048 gen+write=27.1ms avail=3072 state=3
+[     2.916] T exit seq=28
+[     2.917] P joined in 7.6ms
+[     2.917] R resetup hsz=604 ssz=104
+[     2.928] P dropped+resetup(er=0) after 18.7ms state=2
+[     3.079] --- cycle 4: PLAY ---
+[     3.079] S START req=30s state=2 avail=32768 was_run=0
+[     3.081] S prepare=0 avail_after=32768 state=2
+[     3.090] S spawned
+[     3.090] T spawn tid=0
+[     3.091] T silence pad z1=2048 z2=2048 state=3
+[     3.095] T seq=0 w=2048 gen+write=3.6ms avail=27136 state=3
+[     3.095] T FIRST-WRITE latency=0.9ms
+[     3.109] T seq=1 w=2048 gen+write=13.6ms avail=25600 state=3
+[     3.135] T seq=2 w=2048 gen+write=26.1ms avail=25088 state=3
+[     3.161] T seq=3 w=2048 gen+write=26.2ms avail=24064 state=3
+[     3.188] T seq=4 w=2048 gen+write=26.2ms avail=23040 state=3
+[     3.214] T seq=5 w=2048 gen+write=26.2ms avail=22016 state=3
+[     3.241] T seq=6 w=2048 gen+write=26.2ms avail=21504 state=3
+[     3.267] T seq=7 w=2048 gen+write=26.2ms avail=20480 state=3
+[     3.293] T seq=8 w=2048 gen+write=26.4ms avail=19456 state=3
+[     3.320] T seq=9 w=2048 gen+write=26.4ms avail=18944 state=3
+[     3.347] T seq=10 w=2048 gen+write=26.4ms avail=17920 state=3
+[     3.373] T seq=11 w=2048 gen+write=26.4ms avail=16896 state=3
+[     3.400] T seq=12 w=2048 gen+write=26.4ms avail=15872 state=3
+[     3.426] T seq=13 w=2048 gen+write=26.4ms avail=15360 state=3
+[     3.453] T seq=14 w=2048 gen+write=26.4ms avail=14336 state=3
+[     3.479] T seq=15 w=2048 gen+write=26.4ms avail=13312 state=3
+[     3.506] T seq=16 w=2048 gen+write=26.8ms avail=12800 state=3
+[     3.533] T seq=17 w=2048 gen+write=26.8ms avail=11776 state=3
+[     3.560] T seq=18 w=2048 gen+write=26.8ms avail=10752 state=3
+[     3.587] T seq=19 w=2048 gen+write=26.8ms avail=10240 state=3
+[     3.614] T seq=20 w=2048 gen+write=26.8ms avail=9216 state=3
+[     3.641] T seq=21 w=2048 gen+write=26.8ms avail=8192 state=3
+[     3.668] T seq=22 w=2048 gen+write=26.8ms avail=7168 state=3
+[     3.695] T seq=23 w=2048 gen+write=26.8ms avail=6656 state=3
+[     3.722] T seq=24 w=2048 gen+write=26.8ms avail=5632 state=3
+[     3.749] T seq=25 w=2048 gen+write=26.8ms avail=4608 state=3
+[     3.776] T seq=26 w=2048 gen+write=26.8ms avail=4096 state=3
+[     3.784] --- cycle 4: STOP ---
+[     3.784] P STOP entry run=1 state=3 avail=4096
+[     3.803] T seq=27 w=2048 gen+write=27.1ms avail=3072 state=3
+[     3.803] T exit seq=28
+[     3.803] P joined in 19.2ms
+[     3.803] R resetup hsz=604 ssz=104
+[     3.813] P dropped+resetup(er=0) after 28.6ms state=2
+[     3.963] --- cycle 5: PLAY ---
+[     3.964] S START req=30s state=2 avail=32768 was_run=0
+[     3.966] S prepare=0 avail_after=32768 state=2
+[     3.967] S spawned
+[     3.967] T spawn tid=0
+[     3.968] T silence pad z1=2048 z2=2048 state=3
+[     3.976] T seq=0 w=2048 gen+write=7.4ms avail=27136 state=3
+[     3.976] T FIRST-WRITE latency=1.3ms
+[     4.004] T seq=1 w=2048 gen+write=27.3ms avail=26624 state=3
+[     4.057] T seq=2 w=2048 gen+write=52.5ms avail=26624 state=3
+[     4.110] T seq=3 w=2048 gen+write=52.6ms avail=27136 state=3
+[     4.163] T seq=4 w=2048 gen+write=52.7ms avail=27648 state=3
+[     4.216] T seq=5 w=2048 gen+write=52.7ms avail=27648 state=3
+[     4.269] T seq=6 w=2048 gen+write=52.7ms avail=28160 state=3
+[     4.322] T seq=7 w=2048 gen+write=52.8ms avail=28160 state=3
+[     4.375] T seq=8 w=2048 gen+write=53.1ms avail=28672 state=3
+[     4.429] T seq=9 w=2048 gen+write=53.0ms avail=28672 state=3
+[     4.482] T seq=10 w=2048 gen+write=53.1ms avail=29184 state=3
+[     4.535] T seq=11 w=2048 gen+write=53.0ms avail=29696 state=3
+[     4.589] T seq=12 w=2048 gen+write=53.1ms avail=29696 state=3
+[     4.642] T seq=13 w=2048 gen+write=53.0ms avail=30208 state=3
+[     4.643] --- cycle 5: STOP ---
+[     4.644] P STOP entry run=1 state=3 avail=30208
+[     4.696] T seq=14 w=2048 gen+write=53.7ms avail=30208 state=3
+[     4.696] T exit seq=15
+[     4.697] P joined in 53.3ms
+[     4.697] R resetup hsz=604 ssz=104
+[     4.713] P dropped+resetup(er=0) after 69.5ms state=2
+[     4.865] === AUTOTEST end ===

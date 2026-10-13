@@ -84,3 +84,8 @@
 - **附带发现**：v8 提交信息声称的"2 周期静音垫"实际从未进入代码（提交与实现脱节）——本版补上；hwp[512] 固定栈缓冲真实尺寸不够（snd_pcm_hw_params_sizeof()=604）→ 偶发 stack smashing，改 alloca(sizeof)
 - 新调试设施：/home/user/audio_dbg.log 无缓冲音频追踪（每 writei 的返回/avail/state/耗时）；`touch /home/user/gautotest` + 启动 = 快速 Play/Stop 压力自测（env 变量经 nohup 传递不稳定，文件触发可靠）
 - **此版本为音频验收新基线，后续改动必须与本版 A/B 对比，不准静默回退**
+
+### v9 用户验收（2026-10-13）
+- 真机快速反复 PLAY/STOP：Play 点击瞬间垃圾声音消失，四波形切换无杂音，音量 0-1000% 正常——**用户确认修复**
+- v9 为音频最终基线（md5 186ff3eb），后续音频改动必须与它 A/B 对比
+- 修复证据日志：audio_dbg4.log（AUTOTEST 6/6 循环，零 XRUN 零 -EPIPE，每次 STOP drop+resetup 后干净回 PREPARED）
