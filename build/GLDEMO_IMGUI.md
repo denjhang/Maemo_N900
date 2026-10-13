@@ -221,3 +221,10 @@
   - MANAGE 页：已装动态 APP 列表 + 运行状态（running/background/stopped）+ KILL + UNINSTALL + RESCAN NOW
 - 卸载管线统一走 g_dyn_dead 延迟处理（安全点 dlclose），APPMGR 和桌面长按共用
 - 插件生态三件套齐了：hello 示例（SDK）、热加载（分发）、APPMGR（安装/卸载/管理）
+
+## IMRUN Shell v26（2026-10-14，全面模块化 + 闪退修复 + 整条标题栏解停靠）
+- 二进制 md5: 7ff2ce8ade89fe80e0b23b94f7199318（/home/user/imrun/imrun）
+- **闪退根因修复**：shell_begin_app 折叠窗口路径（Begin 返回 false）push 了 WindowBg 透明色没 pop——每帧泄漏一层样式栈，32 层后 ImGui 断言杀进程。FONTS/KEYS 从 ini 恢复成折叠态所以一开就死
+- **全面模块化**：系统程序仅 3 个（SYSINFO / WALLPAP / APPMGR，不可卸载——图标层天然保护：卸载徽章只画给动态 APP），其余 6 个（SETTINGS/WIDGETS/TONEGEN/VIBRA/KEYS/FONTS）全部拆为独立 .so 模块（research/apps/<id>/，各 ~6KB），已部署 apps/ 目录；主程序新增导出 imrun_now()、imrun_font_cn/world/kr()；插件生命周期自理（tonegen 的 imapp_destroy 停音频、vibra 的停震动）
+- **整条标题栏解除停靠（第二次核心补丁）**：DockNodeUpdateTabBar 隐藏 tab 栏分支强制清除 HiddenTabBar——tab 条即完整标题栏，任意位置拖动即可解停靠（原版只留左上角小三角）
+- 实测：7 个插件（含 hello）全部在线（/proc maps 28 条），进程稳定

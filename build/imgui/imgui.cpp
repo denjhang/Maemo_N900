@@ -19517,6 +19517,10 @@ static void ImGui::DockNodeUpdateTabBar(ImGuiDockNode* node, ImGuiWindow* host_w
     // Hidden tab bar will show a triangle on the upper-left (in Begin)
     if (node->IsHiddenTabBar() || node->IsNoTabBar())
     {
+        // IMRUN patch: never allow a hidden tab bar - the tab strip IS the
+        // title bar, dragging anywhere on it undocks the window (a hidden
+        // tab bar leaves only the tiny corner triangle as a drag zone)
+        node->LocalFlags &= ~ImGuiDockNodeFlags_HiddenTabBar;
         node->VisibleWindow = (node->Windows.Size > 0) ? node->Windows[0] : NULL;
         node->IsFocused = is_focused;
         if (is_focused)

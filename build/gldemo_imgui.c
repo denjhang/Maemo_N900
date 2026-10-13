@@ -750,6 +750,7 @@ static volatile int audio_cmd, audio_cmd_sec; /* 0 none, 1 start, 2 stop */
 void audio_ui_start(int seconds) { audio_cmd_sec = seconds; audio_cmd = 1; }
 void audio_ui_stop(void)         { audio_cmd = 2; }
 void imrun_audio_stop_all(void)     { audio_cmd = 2; } /* window closed = stop */
+double imrun_now(void)             { return now(); } /* plugin clock (relative) */
 static void *audio_ctl(void *arg) {
     (void)arg;
     while (1) {

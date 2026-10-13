@@ -261,11 +261,9 @@ static void dyn_scan(void) {
 struct ShellApp { const char *name; bool open; bool mini; bool cascade; bool ever;
                   float anim; double anim_t0;   /* open/restore transition */ };
 static ShellApp g_apps[] = {
-    {"IMGUI", false, false, false, false, 1, 0}, {"WIDGETS", false, false, false, false, 1, 0},
-    {"TONEGEN", false, false, false, false, 1, 0}, {"VIBRA", false, false, false, false, 1, 0},
-    {"KEYS", false, false, false, false, 1, 0}, {"FONTS", false, false, false, false, 1, 0},
-    {"SYSINFO", false, false, false, false, 1, 0}, {"WALLPAP", false, false, false, false, 1, 0},
-    {"APPMGR", false, false, false, false, 1, 0},
+    {"SYSINFO", false, false, false, false, 1, 0},   /* system: not uninstallable */
+    {"WALLPAP", false, false, false, false, 1, 0},   /* system */
+    {"APPMGR", false, false, false, false, 1, 0},    /* system */
 };
 /* desktop edit mode: long-press an icon -> red X badges (uninstall) */
 static bool g_desk_edit = false;
@@ -280,10 +278,6 @@ static void shell_minimize(int i);
 /* patched-ImGui native minimize hook: window title "NAME###appN" -> N */
 void imrun_minimize_by_title(const char *title);
 extern "C" void imrun_audio_stop_all(void); /* gldemo side: TONEGEN cleanup */
-extern "C" int audio_wave;   /* gldemo side */
-extern "C" int audio_volume;
-int audio_ui_alive = 0;      /* cleared on close; TONEGEN reads for display */
-static void audio_wave_reset(void) { audio_wave = 0; audio_volume = 100; }
 void igui_ctrl_combo(char c);         /* from X11 pump: ctrl+letter combos */
 
 void igui_key_char(const char *utf8) {
@@ -442,17 +436,13 @@ void imrun_minimize_by_title(const char *title) {
    anything NOT reset here would survive close - keep this exhaustive. */
 #include <string.h>
 static void shell_app_destroy(int i) {
-    switch (i) {
-    case 2: /* TONEGEN: stop tone generator, wave/vol back to defaults */
-        imrun_audio_stop_all();
-        audio_wave_reset();
-        break;
-    case 3: /* VIBRA: stop any running pattern */
-        vibra_stop();
-        break;
-    default: break; /* display-only apps hold no resources */
-    }
+    (void)i; /* system apps hold no resources; plugins own their destroy() */
 }
+
+/* font handles for the FONTS plugin (g_*font are file-static) */
+extern "C" ImFont *imrun_font_cn(void) { return g_cnfont; }
+extern "C" ImFont *imrun_font_world(void) { return g_worldfont; }
+extern "C" ImFont *imrun_font_kr(void) { return g_krfont; }
 static void shell_minimize_all(void) {
     for (int i = 0; i < NAPPS; i++) g_apps[i].mini = true;
     g_focus = -1;
@@ -532,7 +522,7 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     /* NATIVE title bar + native docking, untouched. p_open gives the X. */
     bool shown = ImGui::Begin(title, &a.open);
     if (pushed_alpha) ImGui::PopStyleVar();
-    if (!shown) { ImGui::End(); shell_close(i); return false; }
+    if (!shown) { ImGui::End(); ImGui::PopStyleColor(); shell_close(i); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
     /* minimize button inside the NATIVE title bar, left of the X */
     {
@@ -556,65 +546,25 @@ static void shell_draw_icon(int i, ImVec2 c, float s, ImU32 accent) {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImU32 line = IM_COL32(235, 240, 245, 255);
     switch (i) {
-    case 0: { /* IMGUI: cube */
-        ImVec2 t = c, r = ImVec2(c.x + s, c.y + s * 0.30f), b = ImVec2(c.x, c.y + s * 0.60f);
+    case -1: { /* plugin (dyn) app: cube */
+        ImVec2 t = c, r = ImVec2(c.x + s, c.y + s * 0.30f), b2 = ImVec2(c.x, c.y + s * 0.60f);
         ImVec2 l = ImVec2(c.x - s, c.y + s * 0.30f), bb = ImVec2(c.x, c.y + s * 1.05f);
-        dl->AddTriangleFilled(l, b, bb, IM_COL32(30, 80, 115, 255));
-        dl->AddTriangleFilled(b, r, bb, IM_COL32(45, 115, 165, 255));
-        dl->AddTriangleFilled(t, r, b, accent);
-        dl->AddTriangleFilled(t, b, l, IM_COL32(70, 150, 200, 255));
+        dl->AddTriangleFilled(l, b2, bb, IM_COL32(30, 80, 115, 255));
+        dl->AddTriangleFilled(b2, r, bb, IM_COL32(45, 115, 165, 255));
+        dl->AddTriangleFilled(t, r, b2, accent);
+        dl->AddTriangleFilled(t, b2, l, IM_COL32(70, 150, 200, 255));
         break;
     }
-    case 1: { /* WIDGETS: three sliders */
+    case 1: { /* WALLPAP: layered translucent squares */
         for (int k = 0; k < 3; k++) {
-            float y = c.y - s * 0.5f + k * s * 0.5f;
-            dl->AddLine(ImVec2(c.x - s, y), ImVec2(c.x + s, y), line, 3.0f);
-            float kx = c.x - s * 0.4f + k * s * 0.55f;
-            dl->AddCircleFilled(ImVec2(kx, y), s * 0.16f, accent);
+            float o = s * (0.45f - k * 0.18f);
+            ImU32 cc = IM_COL32(60 + k * 50, 80 + k * 60, 120 + k * 60, 200 - k * 40);
+            dl->AddRectFilled(ImVec2(c.x - o, c.y - o), ImVec2(c.x + o, c.y + o),
+                              cc, 4.0f + k * 3.0f);
         }
         break;
     }
-    case 2: { /* TONEGEN: sine wave */
-        ImVec2 prev = ImVec2(c.x - s, c.y);
-        for (int k = 1; k <= 24; k++) {
-            float x = c.x - s + (2.0f * s) * k / 24.0f;
-            float y = c.y - sinf(k * 6.2831f * 1.5f / 24.0f) * s * 0.55f;
-            dl->AddLine(prev, ImVec2(x, y), accent, 3.5f);
-            prev = ImVec2(x, y);
-        }
-        break;
-    }
-    case 3: { /* VIBRA: phone + shake arcs */
-        dl->AddRectFilled(ImVec2(c.x - s * 0.35f, c.y - s * 0.7f),
-                          ImVec2(c.x + s * 0.35f, c.y + s * 0.7f), accent, 6.0f);
-        for (int k = 0; k < 2; k++) {
-            float rr = s * (0.55f + k * 0.25f);
-            dl->PathArcTo(c, rr, 0.75f * 3.14159f, 1.25f * 3.14159f, 20);
-            dl->PathStroke(IM_COL32(235, 240, 245, 200), 0, 2.5f);
-            dl->PathArcTo(c, rr, 1.75f * 3.14159f, 2.25f * 3.14159f, 20);
-            dl->PathStroke(IM_COL32(235, 240, 245, 200), 0, 2.5f);
-        }
-        break;
-    }
-    case 4: { /* KEYS: keyboard */
-        dl->AddRect(ImVec2(c.x - s, c.y - s * 0.6f), ImVec2(c.x + s, c.y + s * 0.6f),
-                    line, 4.0f, 0, 2.5f);
-        for (int r = 0; r < 3; r++)
-            for (int k = 0; k < 5; k++)
-                dl->AddRectFilled(
-                    ImVec2(c.x - s * 0.8f + k * s * 0.4f, c.y - s * 0.42f + r * s * 0.34f),
-                    ImVec2(c.x - s * 0.8f + k * s * 0.4f + s * 0.28f,
-                           c.y - s * 0.42f + r * s * 0.34f + s * 0.2f),
-                    (r == 2 && k == 1) ? accent : IM_COL32(200, 210, 220, 160), 2.0f);
-        break;
-    }
-    case 5: { /* FONTS: big A + 文 handled as text by caller; fallback glyph */
-        dl->AddCircle(c, s * 0.7f, accent, 40, 3.0f);
-        dl->AddLine(ImVec2(c.x - s * 0.35f, c.y), ImVec2(c.x + s * 0.35f, c.y), line, 2.5f);
-        dl->AddLine(ImVec2(c.x, c.y - s * 0.35f), ImVec2(c.x, c.y + s * 0.35f), line, 2.5f);
-        break;
-    }
-    case 8: { /* APPMGR: 2x2 app grid + plus */
+    case 2: { /* APPMGR: 2x2 app grid */
         for (int r = 0; r < 2; r++)
             for (int k = 0; k < 2; k++)
                 dl->AddRectFilled(ImVec2(c.x - s * 0.7f + k * s * 0.8f, c.y - s * 0.7f + r * s * 0.8f),
@@ -743,7 +693,7 @@ void igui_build_ui(double t, float fps) {
             dl->AddRect(p0, p1,
                         on ? IM_COL32(90, 200, 240, 220) : IM_COL32(255, 255, 255, 45),
                         10.0f, 0, hot ? 2.5f : 1.5f);
-            shell_draw_icon(dyn ? 7 : i, ImVec2(bx + (cellw - 14) * 0.5f, by + 34), 17.0f,
+            shell_draw_icon(dyn ? -1 : i, ImVec2(bx + (cellw - 14) * 0.5f, by + 34), 17.0f,
                             dyn ? IM_COL32(160, 120, 220, 255) : g_app_accent[i]);
             char label[40];
             snprintf(label, sizeof label, "%s%s", nm, on ? " *" : "");
@@ -928,156 +878,8 @@ void igui_build_ui(double t, float fps) {
 
     /* ================= apps (each opened on demand) ================= */
 
-    /* APP: IMGUI - runtime settings + render stats */
-    if (shell_begin_app(0, ImVec2(20, 20), ImVec2(400, 380))) {
-        ImGuiIO &io = ImGui::GetIO();
-        ImGuiStyle &st = ImGui::GetStyle();
-        static int face = 0;
-        static const char *faces[2] = {"MSYH", "BITMAP"};
-        static const int face_font[2] = {0, 3};
-        static float fsize = 20.0f;
-        if (ImGui::Combo("FACE", &face, faces, 2))
-            if (g_fonts[face_font[face]]) io.FontDefault = g_fonts[face_font[face]];
-        if (ImGui::SliderFloat("FONT SIZE", &fsize, 10.0f, 32.0f, "%.0f px",
-                               ImGuiSliderFlags_AlwaysClamp)) {
-            /* per official imgui_demo.cpp:8595 — NewFrame resets FontSizeBase
-               from _NextFrameFontSizeBase every frame, must set BOTH */
-            st.FontSizeBase = (float)(int)(fsize + 0.5f);
-            st._NextFrameFontSizeBase = st.FontSizeBase;
-        }
-        static float uiscale = 1.0f;
-        if (ImGui::SliderFloat("UI SCALE", &uiscale, 0.6f, 2.0f, "%.2fx",
-                               ImGuiSliderFlags_AlwaysClamp))
-            st.FontScaleMain = uiscale;
-        ImGui::Separator();
-        ImGui::Text("FPS: %.1f  (%.2f ms)", fps, fps > 0 ? 1000.0 / fps : 0);
-        ImGui::Text("SGX530 - GLES 1.1 - EGL - NON-COMPOSITED");
-        static float v1 = 0.6f, v2 = 0.35f;
-        ImGui::SliderFloat("Engine load", &v1, 0, 1);
-        ImGui::SliderFloat("Color hue", &v2, 0, 1);
-        static float tint[4] = {0.3f, 0.6f, 1.0f, 1.0f};
-        tint[0] = v2; tint[2] = 1.0f - v2;
-        ImGui::ColorEdit4("Tint", tint, ImGuiColorEditFlags_NoInputs);
-        ImGui::ProgressBar(fps / 85.0f, ImVec2(-1, 0), "VSYNC");
-        if (ImGui::TreeNode("Render stats")) {
-            ImGui::Text("Display: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
-            ImGui::Text("FontScaleMain: %.2f", ImGui::GetStyle().FontScaleMain);
-            ImGui::Text("Vertices: %d", ImGui::GetIO().MetricsRenderVertices);
-            ImGui::Text("Indices: %d", ImGui::GetIO().MetricsRenderIndices);
-            ImGui::Text("Windows: %d", ImGui::GetIO().MetricsRenderWindows);
-            ImGui::TreePop();
-        }
-        float wave[64];
-        for (int i = 0; i < 64; i++)
-            wave[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
-        ImGui::PlotLines("Wave", wave, 64, 0, "SGX load", 0.0f, 1.0f, ImVec2(360, 60));
-
-        shell_end_app();
-    }
-
-    /* APP: WIDGETS - imgui widget lab */
-    if (shell_begin_app(1, ImVec2(60, 60), ImVec2(360, 240))) {
-        static int clicks = 0;
-        if (ImGui::Button("PUSH ME")) clicks++;
-        ImGui::SameLine();
-        ImGui::Text("count=%d", clicks);
-        static bool chk = true;
-        ImGui::Checkbox("enable", &chk);
-        static int radio = 0;
-        ImGui::RadioButton("sd", &radio, 0); ImGui::SameLine();
-        ImGui::RadioButton("mmc", &radio, 1); ImGui::SameLine();
-        ImGui::RadioButton("usb", &radio, 2);
-        static float prog = 0.4f;
-        prog = 0.5f + 0.45f * sinf((float)t);
-        ImGui::ProgressBar(prog, ImVec2(-1, 0), "COPY");
-        static int listitem = 1;
-        const char *list[] = {"PPSSPP 0.9.6", "cps2emu 0.6", "drnoksnes 1.3", "gldemo 2026"};
-        ImGui::ListBox("APPS", &listitem, list, 4);
-        ImGui::PlotLines("LOAD", g_plot, 64, 0, NULL, 0.0f, 1.0f, ImVec2(320, 50));
-
-        shell_end_app();
-    }
-
-    /* APP: TONEGEN - ALSA waveform generator */
-    if (shell_begin_app(2, ImVec2(120, 100), ImVec2(320, 220))) {
-        extern double audio_deadline;
-        if (audio_on) {
-            int left = (int)(audio_deadline - now_double());
-            ImGui::Text("ALSA PCM: PLAYING 440Hz (%ds left)", left);
-        } else
-            ImGui::Text("ALSA PCM: idle");
-        if (ImGui::Button("PLAY 20s", ImVec2(140, 48)))
-            audio_ui_start(20);
-        ImGui::SameLine();
-        if (ImGui::Button("STOP", ImVec2(140, 48)))
-            audio_ui_stop(); /* async: never join/ioctl in UI thread */
-        {
-            extern int audio_volume;
-            extern int audio_wave;
-            audio_ui_alive = 1; /* TONEGEN instance is live */
-            const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
-            ImGui::Combo("WAVE", &audio_wave, waves, 4);
-            ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
-        }
-
-        shell_end_app();
-    }
-
-    /* APP: VIBRA */
-    if (shell_begin_app(3, ImVec2(160, 140), ImVec2(320, 180))) {
-        static int ms = 1000;
-        ImGui::SliderInt("DURATION", &ms, 100, 5000, "%d ms");
-        if (ImGui::Button("VIBRATE", ImVec2(140, 48)))
-            vibra_ping(ms);
-        ImGui::SameLine();
-        if (ImGui::Button("STOP ALL", ImVec2(140, 48)))
-            vibra_stop();
-
-        shell_end_app();
-    }
-
-    /* APP: KEYS - hardware keyboard test */
-    if (shell_begin_app(4, ImVec2(200, 80), ImVec2(360, 200))) {
-        ImGui::Text("last: %s", last_key[0] ? last_key : "(press slide-out keyboard)");
-        ImGui::TextUnformatted("type into: ");
-        ImGui::SameLine();
-        static char textbuf[64] = "";
-        ImGui::InputText("##kb", textbuf, sizeof textbuf);
-        ImGui::Text("CTRL+W closes the focused window");
-
-        shell_end_app();
-    }
-
-    /* APP: FONTS - multilingual */
-    if (shell_begin_app(5, ImVec2(240, 40), ImVec2(420, 320))) {
-        if (g_cnfont && ImGui::Button("USE CHINESE FONT"))
-            ImGui::GetIO().FontDefault = g_cnfont;
-        if (g_cnfont) {
-            ImGui::PushFont(g_cnfont);
-            ImGui::Text("诺基亚 N900 复活了");
-            ImGui::PopFont();
-        }
-        ImGui::Text("FR: Bonjour! Ça marche très bien.");
-        ImGui::Text("DE: Grüße — äöü ß.");
-        ImGui::Text("ES: ¡Hola! El niño juega.");
-        ImGui::Text("RU: Привет, мир!");
-        if (g_worldfont) {
-            ImGui::PushFont(g_worldfont);
-            ImGui::Text("JP: こんにちは世界");
-            ImGui::Text("CN: 中文汉字动态烘焙。");
-            ImGui::PopFont();
-        }
-        if (g_krfont) {
-            ImGui::PushFont(g_krfont);
-            ImGui::Text("KR: 안녕하세요");
-            ImGui::PopFont();
-        }
-
-        shell_end_app();
-    }
-
     /* APP: SYSINFO - hardware + version */
-    if (shell_begin_app(6, ImVec2(300, 120), ImVec2(380, 260))) {
+    if (shell_begin_app(0, ImVec2(300, 120), ImVec2(380, 260))) {
         for (int i = 0; i < hw_n; i++) ImGui::TextUnformatted(hw[i]);
         ImGui::Separator();
         ImGui::Text("Nokia N900 - 2009 - Cortex A8 + SGX530");
@@ -1103,7 +905,7 @@ void igui_build_ui(double t, float fps) {
         shell_end_app();
     }
     /* APP: WALLPAP - wallpaper engine + transparency controls */
-    if (shell_begin_app(7, ImVec2(360, 160), ImVec2(420, 300))) {
+    if (shell_begin_app(1, ImVec2(360, 160), ImVec2(420, 300))) {
         const char *modes[4] = {"3D DYNAMIC", "3D STATIC", "2D DYNAMIC", "2D STATIC"};
         int m = g_wall_mode;
         if (ImGui::Combo("MODE", &m, modes, 4)) g_wall_mode = m;
@@ -1121,7 +923,7 @@ void igui_build_ui(double t, float fps) {
     }
 
     /* APP: APPMGR - install (filtered list) / manage / stats */
-    if (shell_begin_app(8, ImVec2(60, 40), ImVec2(440, 340))) {
+    if (shell_begin_app(2, ImVec2(60, 40), ImVec2(440, 340))) {
         static char filter[40] = "";
         if (ImGui::BeginTabBar("mgr")) {
         if (ImGui::BeginTabItem("INSTALL")) {
