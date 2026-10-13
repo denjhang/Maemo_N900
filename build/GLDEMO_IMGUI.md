@@ -280,3 +280,8 @@
 - 宿主新增导出：imrun_dyn_count/name/state/kill/uninstall、imrun_host_rescan、imrun_vibra_ping/stop（插件可调用）
 - 实测：9 插件（7 常规+2 系统）全加载（maps 32 条），SYSTEM/APPMGR 打开存活
 - 闪退案底结论（黑匣子实锤）：之前 v0.3.2 的"修复"没找到真凶——统一架构从根上消灭了内建应用的特殊路径
+
+## IMRUN v0.4.1（2026-10-14，黑屏 bug：渲染后端被误删）
+- 二进制 md5: 4ac847572ecac556db9351faa9d90a39（/home/user/imrun/imrun）
+- **"只剩立方体飘"根因**：v0.4 重写 shell 时把 GL 提交后端（igui_render 的 DrawElements/字体纹理上传/裁剪循环）一并删掉，只剩 ImGui::Render() 构建列表——绘制数据从未送进 GPU。从 git 历史（6532303）找回完整后端恢复；fonts.so 的字体访问器（imrun_font_cn 等）同样被误删，一并恢复（它此前 dlopen 失败被静默跳过）
+- 教训入档：重写大文件时边界必须按函数对齐，不能按注释标记切——本次 a/b 切点之间夹着与 shell 无关的后端代码

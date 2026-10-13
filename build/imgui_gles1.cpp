@@ -441,7 +441,61 @@ static ImU32 g_app_accent[8] = {
 /* ---- C-facing bridge (gldemo pump calls these) ---- */
 void igui_mouse_pos(float x, float y) { ImGui::GetIO().AddMousePosEvent(x, y); }
 void igui_mouse_btn(int btn, int down) { ImGui::GetIO().AddMouseButtonEvent(btn, down != 0); }
-void igui_render(void) { ImGui::Render(); }
+void igui_render(void) {
+    ImGui::Render();
+    ImVector<ImTextureData *> &texs = ImGui::GetPlatformIO().Textures;
+    for (int i = 0; i < texs.size(); i++) {
+        ImTextureData *tex = texs[i];
+        if (!tex) continue;
+        if (tex->Status == ImTextureStatus_WantCreate ||
+            tex->Status == ImTextureStatus_WantUpdates)
+            upload_texture(tex);
+        else if (tex->Status == ImTextureStatus_WantDestroy)
+            tex->SetStatus(ImTextureStatus_Destroyed);
+    }
+    ImDrawData *dd = ImGui::GetDrawData();
+    if (!dd) return;
+    ImGuiIO &io = ImGui::GetIO();
+    float fbw = io.DisplaySize.x, fbh = io.DisplaySize.y;
+    if (dd->DisplaySize.x <= 0 || dd->DisplaySize.y <= 0) return;
+    gl.Disable(GL_SCISSOR_TEST);
+    gl.MatrixMode(GL_PROJECTION_M);
+    gl.LoadIdentity();
+    gl.Enable(GL_BLEND);
+    gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    gl.Enable(GL_TEXTURE_2D);
+    gl.Orthof(0, fbw, fbh, 0, -1, 1);
+    gl.MatrixMode(GL_MODELVIEW_M);
+    gl.LoadIdentity();
+    gl.BindTexture(GL_TEXTURE_2D, fontTex);
+    for (int n = 0; n < dd->CmdListsCount; n++) {
+        const ImDrawList *cmdl = dd->CmdLists[n];
+        const ImDrawVert *vtx = cmdl->VtxBuffer.Data;
+        const ImDrawIdx *idx = cmdl->IdxBuffer.Data;
+        if (!vtx || !idx) continue;
+        gl.EnableClientState(0x8074);
+        gl.EnableClientState(0x8076);
+        gl.EnableClientState(0x8078);
+        gl.VertexPointer(2, GL_FLOAT, sizeof(ImDrawVert), &vtx->pos);
+        gl.TexCoordPointer(2, GL_FLOAT, sizeof(ImDrawVert), &vtx->uv);
+        gl.ColorPointer(4, GL_UNSIGNED_BYTE, sizeof(ImDrawVert), &vtx->col);
+        for (int ci = 0; ci < cmdl->CmdBuffer.Size; ci++) {
+            const ImDrawCmd *cmd = &cmdl->CmdBuffer[ci];
+            if (cmd->UserCallback) continue;
+            ImVec4 crs = cmd->ClipRect;
+            if (crs.x < fbw && crs.y < fbh && crs.z > 0 && crs.w > 0) {
+                gl.Scissor((int)crs.x, (int)(fbh - crs.w),
+                           (int)(crs.z - crs.x), (int)(crs.w - crs.y));
+                gl.Enable(GL_SCISSOR_TEST);
+                gl.DrawElements(GL_TRIANGLES, (int)cmd->ElemCount, GL_UNSIGNED_SHORT,
+                                (const void *)(idx + cmd->IdxOffset));
+                gl.Disable(GL_SCISSOR_TEST);
+            }
+        }
+    }
+    gl.Disable(GL_BLEND);
+    gl.Disable(GL_TEXTURE_2D);
+}
 void imrun_minimize_by_title(const char *title) {
     if (!title) return;
     const char *h = strstr(title, "###dyn");
@@ -450,6 +504,9 @@ void imrun_minimize_by_title(const char *title) {
         if (i >= 0 && i < g_dyn_n) dyn_minimize(i);
     }
 }
+extern "C" ImFont *imrun_font_cn(void) { return g_cnfont; }
+extern "C" ImFont *imrun_font_world(void) { return g_worldfont; }
+extern "C" ImFont *imrun_font_kr(void) { return g_krfont; }
 static const char *shell_clock(void) {
     static char buf[8];
     time_t tt = time(NULL);
