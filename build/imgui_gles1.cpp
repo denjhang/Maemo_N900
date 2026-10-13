@@ -33,6 +33,10 @@ typedef struct {
 } IGlfns;
 
 static IGlfns gl;
+static ImFont *g_fonts[4];
+static const char *g_fontnames[4] = {"MSYH", "MSYH", "MSYH", "BITMAP"};
+static const float g_sizes[4] = {20.0f, 20.0f, 20.0f, 22.0f};
+static int g_fontsel = 1;
 static int scrW = 800, scrH = 480;
 static unsigned fontTex = 0;
 
@@ -89,6 +93,7 @@ int igui_init(int w, int h, IGlfns *fns) {
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)w, (float)h);
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; /* dynamic font sizes */
     io.MouseDragThreshold = 3.0f; /* touch: 6px default eats finger gestures */
     io.DeltaTime = 1.0f / 60.0f;
     ImGui::StyleColorsDark();
@@ -98,11 +103,28 @@ int igui_init(int w, int h, IGlfns *fns) {
     io.FontGlobalScale = 1.0f;
 #endif
     /* pixel-perfect fonts, same recipe as the music player v16:
-       rasterize at the FINAL pixel size + snap to pixels, never upscale */
+       pre-rasterize every choice at its FINAL pixel size + snap to pixels.
+       msyh.ttc lives at /home/user/fonts/msyh.ttc. ASCII range only — the
+       legacy preload path would blow the 2048px texture limit with Chinese
+       ranges (SGX530 max texture size). */
+    /* 1.92 draws at style.FontSizeBase (dynamic bake per requested size),
+       NOT the AddFont SizePixels — so load each face ONCE and set
+       FontSizeBase on selection. Sizes rasterize on demand, pixel-perfect. */
     ImFontConfig fcfg;
-    fcfg.SizePixels = 22.0f;
+    fcfg.SizePixels = 20.0f;
     fcfg.PixelSnapH = true;
-    io.Fonts->AddFontDefault(&fcfg);
+    g_fonts[0] = g_fonts[1] = g_fonts[2] = io.Fonts->AddFontFromFileTTF(
+        "/home/user/fonts/msyh.ttc", 20.0f, &fcfg,
+        io.Fonts->GetGlyphRangesDefault());
+    {
+        ImFontConfig bcfg;
+        bcfg.SizePixels = 22.0f;
+        bcfg.PixelSnapH = true;
+        g_fonts[3] = io.Fonts->AddFontDefault(&bcfg);
+    }
+    g_fontsel = 1;
+    io.FontDefault = g_fonts[1] ? g_fonts[1] : io.Fonts->Fonts[0];
+    ImGui::GetStyle().FontSizeBase = g_sizes[1];
     // build default font atlas now (1.92 dynamic font system: mark wants-update)
     return 0;
 }
@@ -110,16 +132,8 @@ int igui_init(int w, int h, IGlfns *fns) {
 void igui_newframe(float dt) {
     ImGuiIO &io = ImGui::GetIO();
     io.DeltaTime = dt > 0 ? dt : 1.0f / 60.0f;
-    // legacy backend (no RendererHasTextures): rebuild atlas if new glyphs
-    // appeared last frame (dynamic fonts clear TexIsBuilt per queued upload),
-    // then push the updated texture to GL. This is what official legacy
-    // backends do around NewFrame in 1.92.
-    io.Fonts->GetTexDataAsRGBA32(NULL, NULL, NULL, NULL);
-    ImTextureData *tex = io.Fonts->TexData;
-    if (tex && (tex->Status == ImTextureStatus_WantUpdates ||
-                tex->Status == ImTextureStatus_WantCreate)) {
-        upload_texture(tex);
-    }
+    // RendererHasTextures backend: glyphs bake on demand at the requested
+    // size; texture uploads happen in igui_render from PlatformIO().Textures.
     ImGui::NewFrame();
 }
 
@@ -138,9 +152,12 @@ void igui_render(void) {
     ImVector<ImTextureData *> &texs = ImGui::GetPlatformIO().Textures;
     for (int i = 0; i < texs.size(); i++) {
         ImTextureData *tex = texs[i];
-        if (tex && (tex->Status == ImTextureStatus_WantCreate ||
-                    tex->Status == ImTextureStatus_WantUpdates))
+        if (!tex) continue;
+        if (tex->Status == ImTextureStatus_WantCreate ||
+            tex->Status == ImTextureStatus_WantUpdates)
             upload_texture(tex);
+        else if (tex->Status == ImTextureStatus_WantDestroy)
+            tex->SetStatus(ImTextureStatus_Destroyed);
     }
     ImDrawData *dd = ImGui::GetDrawData();
     if (!dd) return;
@@ -187,15 +204,45 @@ void igui_render(void) {
 }
 
 // ---------------- demo UI ----------------
+static inline ImVec4 vec4f(float x, float y, float z, float w) { return ImVec4(x, y, z, w); }
+#define ImVec2_to_imvec_helper vec4f
+static float g_plot[64];
 static float hue = 0.4f;
 void igui_build_ui(double t, float fps) {
     (void)t;
+    for (int i = 0; i < 64; i++)
+        g_plot[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
     // full-screen dockspace: drag windows to screen edges to dock
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                  ImGuiDockNodeFlags_PassthruCentralNode);
     ImGui::SetNextWindowPos(ImVec2(20, 40), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(400, 380), ImGuiCond_FirstUseEver);
     ImGui::Begin("N900 GLES1.1 IMGUI");
+    {
+        /* legacy preload bakes glyphs ONLY at AddFont size — runtime font-size
+           changes are a no-op here, so faces are fixed-size by design */
+        ImGuiIO &io = ImGui::GetIO();
+        ImGuiStyle &st = ImGui::GetStyle();
+        static int face = 0;
+        static const char *faces[2] = {"MSYH", "BITMAP"};
+        static const int face_font[2] = {0, 3};
+        static float fsize = 20.0f;
+        if (ImGui::Combo("FACE", &face, faces, 2))
+            if (g_fonts[face_font[face]]) io.FontDefault = g_fonts[face_font[face]];
+        if (ImGui::SliderFloat("FONT SIZE", &fsize, 10.0f, 32.0f, "%.0f px",
+                               ImGuiSliderFlags_AlwaysClamp)) {
+            /* per official imgui_demo.cpp:8595 — NewFrame resets FontSizeBase
+               from _NextFrameFontSizeBase every frame, must set BOTH */
+            st.FontSizeBase = (float)(int)(fsize + 0.5f);
+            st._NextFrameFontSizeBase = st.FontSizeBase;
+        }
+        static float uiscale = 1.0f;
+        if (ImGui::SliderFloat("UI SCALE", &uiscale, 0.6f, 2.0f, "%.2fx",
+                               ImGuiSliderFlags_AlwaysClamp))
+            st.FontScaleMain = uiscale;
+        ImGui::Separator();
+    }
+    ImGui::Separator();
     ImGui::Text("FPS: %.1f  (%.2f ms)", fps, fps > 0 ? 1000.0 / fps : 0);
     ImGui::Text("SGX530 - GLES 1.1 - EGL - NON-COMPOSITED");
     ImGui::Separator();
@@ -225,12 +272,83 @@ void igui_build_ui(double t, float fps) {
     ImGui::End();
 
     // second window bottom-right: system badge
+    /* ---- widgets lab ---- */
+    ImGui::SetNextWindowPos(ImVec2(20, 436), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 240), ImGuiCond_FirstUseEver);
+    ImGui::Begin("WIDGETS LAB");
+    if (ImGui::BeginTabBar("labtabs")) {
+        if (ImGui::BeginTabItem("BASIC")) {
+            static int clicks = 0;
+            if (ImGui::Button("PUSH ME"))
+                clicks++;
+            ImGui::SameLine();
+            ImGui::Text("count=%d", clicks);
+            static bool chk = true;
+            ImGui::Checkbox("enable", &chk);
+            static int radio = 0;
+            ImGui::RadioButton("sd", &radio, 0); ImGui::SameLine();
+            ImGui::RadioButton("mmc", &radio, 1); ImGui::SameLine();
+            ImGui::RadioButton("usb", &radio, 2);
+            static float prog = 0.4f;
+            prog = 0.5f + 0.45f * sinf((float)t);
+            ImGui::ProgressBar(prog, ImVec2(-1, 0), "COPY");
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("TABLE")) {
+            if (ImGui::BeginTable("hw", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                ImGui::TableSetupColumn("COMPONENT");
+                ImGui::TableSetupColumn("VALUE");
+                ImGui::TableHeadersRow();
+                const char *rows[6][2] = {
+                    {"CPU", "Cortex-A8 600MHz"}, {"GPU", "PowerVR SGX530"},
+                    {"RAM", "256MB LPDDR"}, {"SCREEN", "800x480 AMOLED"},
+                    {"GLES", "1.1 fixed-func"}, {"COMPOSITOR", "DISABLED"}};
+                for (int i = 0; i < 6; i++) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(rows[i][0]);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(rows[i][1]);
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("INPUT")) {
+            static int iv = 600;
+            static float fv = 1.25f;
+            ImGui::InputInt("CLOCK MHZ", &iv);
+            ImGui::InputFloat("VOLT", &fv, 0.05f, 0.5f, "%.2f V");
+            static int listitem = 1;
+            const char *list[] = {"PPSSPP 0.9.6", "cps2emu 0.6", "drnoksnes 1.3", "gldemo 2026"};
+            ImGui::ListBox("APPS", &listitem, list, 4);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("TIPS")) {
+            ImGui::TextUnformatted("hover me:");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec2_to_imvec_helper(0.3f, 0.9f, 1.0f, 1.0f), "TOUCH TARGETS");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Touch = left click.\nDrag title bar to dock.\nDrag borders to resize.");
+            }
+            static float col[3] = {0.3f, 0.6f, 1.0f};
+            ImGui::ColorEdit3("LED", col, ImGuiColorEditFlags_NoInputs);
+            ImGui::PlotLines("LOAD", g_plot, 64, 0, NULL, 0.0f, 1.0f, ImVec2(320, 50));
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::End();
+
     ImGui::SetNextWindowPos(ImVec2(560, 396), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(228, 74), ImGuiCond_FirstUseEver);
     ImGui::Begin("SYS", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
     ImGui::Text("Nokia N900 - 2009");
     ImGui::Text("Cortex A8 + SGX530");
     ImGui::Text("imgui %s", ImGui::GetVersion());
+    static bool show_demo = false;
+    ImGui::Checkbox("OFFICIAL DEMO", &show_demo);
+    if (show_demo) ImGui::ShowDemoWindow(&show_demo);
     ImGui::End();
 }
 
