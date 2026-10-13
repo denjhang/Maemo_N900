@@ -533,6 +533,23 @@ static void hw_sample(void) {
     if (hw_n == 0) snprintf(hw[hw_n++], 96, "hw sample failed");
 }
 
+/* fork+exec in the UI thread stalls touch input on the 600MHz core -
+   dbus-send runs in a throwaway thread, UI returns instantly */
+static void *vibra_thread(void *p) {
+    system((char *)p);
+    free(p);
+    return NULL;
+}
+static void vibra_async(const char *cmd) {
+    if (!pthread_create_fn) { system(cmd); return; }
+    char *copy = strdup(cmd);
+    unsigned long tid;
+    if (pthread_create_fn(&tid, NULL, vibra_thread, copy) != 0) {
+        system(cmd);
+        free(copy);
+    }
+}
+
 void vibra_ping(int ms) {
     /* one-shot, self-terminating pattern with explicit deactivate right
        after the requested duration - never loops forever like the call
@@ -542,23 +559,21 @@ void vibra_ping(int ms) {
              "(dbus-send --system --type=method_call --dest=com.nokia.mce "
              "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
              "pattern_activate string:PatternChatAndEmail;"
-             " sleep %d;"
+             " sleep %d.%03d;"
              " dbus-send --system --type=method_call --dest=com.nokia.mce "
              "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
              "pattern_deactivate string:PatternChatAndEmail) 2>/dev/null &",
-             ms / 1000);
-    int r = system(cmd);
-    (void)r;
+             ms / 1000, ms % 1000);
+    vibra_async(cmd);
 }
 
 void vibra_stop(void) {
-    int r = system("dbus-send --system --type=method_call --dest=com.nokia.mce "
-                   "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
-                   "pattern_deactivate string:PatternIncomingCall 2>/dev/null;"
-                   "dbus-send --system --type=method_call --dest=com.nokia.mce "
-                   "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
-                   "pattern_deactivate string:PatternChatAndEmail 2>/dev/null &");
-    (void)r;
+    vibra_async("dbus-send --system --type=method_call --dest=com.nokia.mce "
+                "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
+                "pattern_deactivate string:PatternIncomingCall 2>/dev/null;"
+                "dbus-send --system --type=method_call --dest=com.nokia.mce "
+                "/com/nokia/mce/request com.nokia.mce.request.req_vibrator_"
+                "pattern_deactivate string:PatternChatAndEmail 2>/dev/null &");
 }
 
 void audio_toggle(int on) {
@@ -717,6 +732,32 @@ void audio_stop_full(void) {
     audio_on = 0;
 }
 
+/* ---- async control path: UI never blocks on join/ioctls ----
+   stop path costs 50-150ms (join + drop + full resetup) - measured. Running
+   it in the UI thread starved hildon's touch-vibra on every PLAY re-tap.
+   UI only registers intent; this resident thread does the heavy work. */
+static volatile int audio_cmd, audio_cmd_sec; /* 0 none, 1 start, 2 stop */
+void audio_ui_start(int seconds) { audio_cmd_sec = seconds; audio_cmd = 1; }
+void audio_ui_stop(void)         { audio_cmd = 2; }
+static void *audio_ctl(void *arg) {
+    (void)arg;
+    while (1) {
+        if (usleep_fn) usleep_fn(10000);
+        int cmd = audio_cmd;
+        if (!cmd) continue;
+        audio_cmd = 0;
+        if (cmd == 2) {
+            alog("C ctl: STOP");
+            audio_stop_full();
+        } else if (cmd == 1) {
+            alog("C ctl: START %ds", audio_cmd_sec);
+            audio_start(audio_cmd_sec);
+        }
+    }
+    return NULL;
+}
+static unsigned long audio_ctl_tid;
+
 
 
 /* ============ background: drifting colored cubes ============ */
@@ -780,6 +821,10 @@ int main(void) {
         }
     }
 
+
+    /* resident audio-control thread: PLAY/STOP buttons only set flags */
+    if (pthread_create_fn && pcm)
+        pthread_create_fn(&audio_ctl_tid, NULL, audio_ctl, NULL);
 
     /* AUTOTEST: reproduce rapid Play/Stop garbage, log everything, exit.
        Runs headless right after PCM grab - no GUI interaction needed. */
@@ -888,7 +933,7 @@ int main(void) {
         double el = (t = now()) - t0;
         if (avtest && !av_started && el > 2.5) {
             audio_amp = 2500; /* quiet: don't disturb the human */
-            audio_start(20);
+            audio_ui_start(20);
             av_started = 1;
             av_t0 = el;
             printf("AVTEST tone started (amp=%d)\n", audio_amp);

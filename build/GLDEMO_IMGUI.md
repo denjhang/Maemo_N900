@@ -89,3 +89,11 @@
 - 真机快速反复 PLAY/STOP：Play 点击瞬间垃圾声音消失，四波形切换无杂音，音量 0-1000% 正常——**用户确认修复**
 - v9 为音频最终基线（md5 186ff3eb），后续音频改动必须与它 A/B 对比
 - 修复证据日志：audio_dbg4.log（AUTOTEST 6/6 循环，零 XRUN 零 -EPIPE，每次 STOP drop+resetup 后干净回 PREPARED）
+
+## 发布记录 v10（2026-10-13，UI 零阻塞：音频控制全部异步化）
+- 二进制 md5: 578e66d8c83926b85a7252ad9ab6d3d6
+- **问题（用户实测）**：播放中快速连点 PLAY，系统触摸震动反馈被卡住——UI 线程每次 PLAY 重按同步执行 audio_stop_full()（pthread_join 实测 7~76ms + drop + pcm_resetup 实测 10~70ms ≈ 50~150ms 阻塞），600MHz 单核被打满，hildon 触摸震动被挤兑
+- **修复（SDL/deadbeef 控制路径模式）**：常驻音频控制线程 audio_ctl，UI 的 PLAY/STOP 只登记意图（audio_ui_start/audio_ui_stop，微秒级）；join/drop/resetup/写线程生成全部在控制线程内执行。连点 N 次只是覆盖一个标志变量
+- 顺带：vibra_ping/vibra_stop 的 system()（fork+exec dbus-send）挪到一次性线程——fork 在 UI 线程同样是阻塞点；附带修正 vibra 时长 ms/1000 截断（100ms 休眠变 sleep 0）
+- AUTOTEST 回归：6/6 循环零 XRUN 零 -EPIPE（audio_dbg5.log），v9 音频行为无回退
+- **此版本为 UI 响应性基线：UI 线程音频/震动路径耗时必须为 0（只允许置标志）**

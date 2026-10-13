@@ -255,6 +255,8 @@ extern void audio_stop_full(void);
 extern void vibra_ping(int ms);
 extern void vibra_stop(void);
 extern int audio_start(int seconds);
+extern void audio_ui_start(int seconds); /* async: flags only, ~0us */
+extern void audio_ui_stop(void);
 double now_double();
 }
 static inline ImVec4 vec4f(float x, float y, float z, float w) { return ImVec4(x, y, z, w); }
@@ -410,7 +412,7 @@ void igui_build_ui(double t, float fps) {
             } else
                 ImGui::Text("ALSA PCM: idle");
             if (ImGui::Button("PLAY 20s"))
-                audio_start(20);
+                audio_ui_start(20);
             {
                 extern int audio_volume;
                 extern int audio_wave;
@@ -420,7 +422,7 @@ void igui_build_ui(double t, float fps) {
             }
             ImGui::SameLine();
             if (ImGui::Button("STOP"))
-                audio_stop_full(); /* join writer thread BEFORE closing PCM */
+                audio_ui_stop(); /* async: never join/ioctl in UI thread */
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("VIBRA")) {
