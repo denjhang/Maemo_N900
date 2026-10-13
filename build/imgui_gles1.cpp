@@ -485,14 +485,6 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
 }
 static void shell_end_app(void) { ImGui::End(); }
 
-/* window footer: touch-sized CLOSE (minimize lives in the title bar) */
-static void shell_window_buttons(int i) {
-    ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.55f, 0.15f, 0.15f, 1));
-    if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44)))
-        shell_close(i);
-    ImGui::PopStyleColor();
-}
-
 /* ---- procedural vector icons (ImDrawList, no textures) ---- */
 /* one 56x56 icon tile centered in rect: accent color + glyph per app */
 static void shell_draw_icon(int i, ImVec2 c, float s, ImU32 accent) {
@@ -827,7 +819,7 @@ void igui_build_ui(double t, float fps) {
         for (int i = 0; i < 64; i++)
             wave[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
         ImGui::PlotLines("Wave", wave, 64, 0, "SGX load", 0.0f, 1.0f, ImVec2(360, 60));
-        shell_window_buttons(0);
+
         shell_end_app();
     }
 
@@ -850,7 +842,7 @@ void igui_build_ui(double t, float fps) {
         const char *list[] = {"PPSSPP 0.9.6", "cps2emu 0.6", "drnoksnes 1.3", "gldemo 2026"};
         ImGui::ListBox("APPS", &listitem, list, 4);
         ImGui::PlotLines("LOAD", g_plot, 64, 0, NULL, 0.0f, 1.0f, ImVec2(320, 50));
-        shell_window_buttons(1);
+
         shell_end_app();
     }
 
@@ -875,7 +867,7 @@ void igui_build_ui(double t, float fps) {
             ImGui::Combo("WAVE", &audio_wave, waves, 4);
             ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
         }
-        shell_window_buttons(2);
+
         shell_end_app();
     }
 
@@ -888,7 +880,7 @@ void igui_build_ui(double t, float fps) {
         ImGui::SameLine();
         if (ImGui::Button("STOP ALL", ImVec2(140, 48)))
             vibra_stop();
-        shell_window_buttons(3);
+
         shell_end_app();
     }
 
@@ -900,7 +892,7 @@ void igui_build_ui(double t, float fps) {
         static char textbuf[64] = "";
         ImGui::InputText("##kb", textbuf, sizeof textbuf);
         ImGui::Text("CTRL+W closes the focused window");
-        shell_window_buttons(4);
+
         shell_end_app();
     }
 
@@ -928,7 +920,7 @@ void igui_build_ui(double t, float fps) {
             ImGui::Text("KR: 안녕하세요");
             ImGui::PopFont();
         }
-        shell_window_buttons(5);
+
         shell_end_app();
     }
 
@@ -955,7 +947,7 @@ void igui_build_ui(double t, float fps) {
             }
             ImGui::EndTable();
         }
-        shell_window_buttons(6);
+
         shell_end_app();
     }
 }

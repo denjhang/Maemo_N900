@@ -198,3 +198,9 @@
 - **shell_close 现在走 shell_app_destroy**：关闭 = 实例销毁——TONEGEN 停音频+波形/音量回默认值，VIBRA 停震动；重开 = 全新实例（静态 UI 状态由 ImGui ini 布局之外的窗口内容自动重建）
 - 原则入档：**关掉的 APP 不占任何活资源**（256MB 机器的生存纪律）；将来 .imapp dlopen 版在同一钩子挂 destroy()+dlclose，语义不变
 - 显示型 APP（WIDGETS/KEYS/FONTS/SYSINFO/IMGUI）无资源，关闭即销毁纯 UI 状态
+
+## IMRUN Shell v23（2026-10-14，窗口控制收敛到标题栏）
+- 二进制 md5: 23443b614155451af54646b38081db1b（/home/user/imrun）
+- 窗口底部大红 CLOSE 全部移除——关闭途径收敛：标题栏 X / Ctrl+W /（TONEGEN 等资源型 APP 关窗即销毁资源）
+- 最小化按钮 = v21 的 ImGui 核心补丁（原生标题栏绘制路径内、X 左侧），浮动/停靠均渲染
+- 发布包: research/releases/imrun_release_v23.tar.gz（含 patched imgui 源码、shell/文档/图标）
