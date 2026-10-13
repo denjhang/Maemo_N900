@@ -300,3 +300,10 @@
 ## IMRUN v0.4.3（2026-10-14，交互架构修正：移动只认标题栏）
 - 二进制 md5: 32f743a329e6d7061c3e3db0c55785b6（/home/user/imrun/imrun）
 - **ConfigWindowsMoveFromTitleBarOnly=true**：窗口移动只认标题栏拖拽（+Ctrl+M 方向键模式）——窗口内空白区域的拖动动作彻底让给触摸滚动（翻页），两者不再互相打架；这是 ImGui 原生开关，配合核心补丁 #3（空体拖拽=滚动）形成完整触摸交互模型
+
+## IMRUN v0.4.4（2026-10-14，卡顿根除 + 设置持久化）
+- 二进制 md5: d64c0d54fcf3ad077452f570dfa5c2dc（/home/user/imrun/imrun）
+- **周期性卡顿（~0.5s 一次）根因**：hw_sample 每 60 帧在 UI 线程做 4 次 /proc+/sys 阻塞读（NAND 随机读 50-200ms）——挪到后台线程 10s 周期，UI 线程零文件 I/O（audio_dbg/sysfs 读数已全部线程化）
+- **设置持久化**（用户催了 100 次的）：/home/user/imrun_settings.ini——壁纸模式/配色/窗口/任务栏/桌面透明度/停靠覆盖开关；签名比对变更后 ~1s 自动落盘，启动时加载。实测 wall_mode=2 重启后保持 2D 动态壁纸
+- **持久化此前失效的根因**：程序启动时 root→user 降权（音频 RT 继承），而 imrun/ 目录 root 所有 → fopen 永远失败；设置文件改存 /home/user/（user 可写），整个 imrun/ 树 chown user（同时修好 APPMGR 安装/卸载的同源权限故障）
+- 壁纸入口：SETTINGS 插件第一页 WALLPAPER

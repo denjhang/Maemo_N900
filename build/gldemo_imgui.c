@@ -59,6 +59,16 @@ static int (*pXPending)(void *);
 static int (*pXNextEvent)(void *, void *);
 static int (*pXFlush)(void *);
 static int (*pXLookupString)(void *, char *, int, void **, void *);
+static int (*pXSetErrorHandler)(int (*)(void *, void *), int (*)(void *, void *));
+static void alog(const char *fmt, ...);
+static int imrun_xerror(void *disp, void *ev) {   /* Xlib exit()s by default */
+    alog("[XERROR] X protocol error swallowed (default handler would exit)");
+    return 0;
+}
+
+void imrun_atexit_log(void) {
+    alog("LIFECYCLE exit() called (no signal) - XERROR lines above = Xlib death");
+}
 static unsigned long (*pXLookupKeysym)(void *, int);
 static int (*pXSetInputFocus)(void *, unsigned long, int, unsigned long);
 /* ALSA: sound output without any audio framework */
@@ -111,6 +121,7 @@ static void alog(const char *fmt, ...) {
         if (!alogf) return;
         setvbuf(alogf, NULL, _IONBF, 0); /* survive hangs: flush every line */
     }
+void alog_public(const char *fmt, ...) { alog("%s", fmt); }
     unsigned long ms = (unsigned long)((now() - alog_t0) * 1000.0);
     va_list ap;
     va_start(ap, fmt);
@@ -119,10 +130,20 @@ static void alog(const char *fmt, ...) {
     fputc('\n', alogf);
     va_end(ap);
 }
+void alog_public(const char *fmt, ...) { alog("%s", fmt); }
 static void *hPTHREAD;
 static int (*pthread_create_fn)(unsigned long *, void *, void *(*)(void *), void *);
 static int (*pthread_join_fn)(unsigned long, void **);
 static int (*usleep_fn)(unsigned int);
+static void *hw_thread(void *arg) {
+    (void)arg;
+    void (*sam)(void) = (void (*)(void))arg;
+    while (1) {
+        sam();  /* reads /proc+/sys: blocking flash I/O, NEVER in UI thread */
+        if (usleep_fn) usleep_fn(10000000);
+    }
+    return NULL;
+}
 static int (*sched_setscheduler_fn)(int, int, void *);
 static int (*setgid_fn)(unsigned int);
 static int (*setuid_fn)(unsigned int);
@@ -281,6 +302,7 @@ static int load_syms(void) {
     *(void **)(&pXNextEvent) = dlsym(hX11, "XNextEvent");
     *(void **)(&pXFlush) = dlsym(hX11, "XFlush");
     *(void **)(&pXLookupString) = dlsym(hX11, "XLookupString");
+    *(void **)(&pXSetErrorHandler) = dlsym(hX11, "XSetErrorHandler");
     *(void **)(&pXLookupKeysym) = dlsym(hX11, "XLookupKeysym");
     *(void **)(&pXSetInputFocus) = dlsym(hX11, "XSetInputFocus");
     hALSA = dlopen("libasound.so.2", RTLD_NOW);
@@ -749,7 +771,7 @@ void audio_stop_full(void) {
 static volatile int audio_cmd, audio_cmd_sec; /* 0 none, 1 start, 2 stop */
 void audio_ui_start(int seconds) { audio_cmd_sec = seconds; audio_cmd = 1; }
 void audio_ui_stop(void)         { audio_cmd = 2; }
-void imrun_audio_stop_all(void)     { audio_cmd = 2; } /* window closed = stop */
+void imrun_audio_stop_all(void)     { audio_cmd = 2; } /* plugin-facing */
 double imrun_now(void)             { return now(); } /* plugin clock (relative) */
 static void *audio_ctl(void *arg) {
     (void)arg;
@@ -834,6 +856,10 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     alog_t0 = now();
     alog("LIFECYCLE boot");
+    {
+        extern void imrun_atexit_log(void);
+        imrun_atexit_log();
+    }
     signal(SIGSEGV, fatal_sig);
     signal(SIGBUS, fatal_sig);
     signal(SIGABRT, fatal_sig);
@@ -858,6 +884,7 @@ int main(void) {
         printf("privdrop uid=%d\n", (int)getuid());
     }
     if (init_gfx(W, H)) return 1;
+    if (pXSetErrorHandler) pXSetErrorHandler(imrun_xerror, NULL);
     /* grab the sound card ONCE, hold for entire app lifetime - pulse is
        on-demand (module-suspend-idle): after idle it releases hw, we take
        it and never let go. No open/close racing, no EBUSY intermittency. */
@@ -881,6 +908,8 @@ int main(void) {
     if (pthread_create_fn) {
         unsigned long bt;
         pthread_create_fn(&bt, NULL, batt_reader, NULL);
+        unsigned long ht;
+        pthread_create_fn(&ht, NULL, hw_thread, (void *)hw_sample);
     }
 
     /* AUTOTEST: reproduce rapid Play/Stop garbage, log everything, exit.
@@ -1001,7 +1030,6 @@ int main(void) {
             unsigned gerr = pglGetError();
             printf("AUDIODBG max_stall=%.3fs stalls=%d underruns=%d\n", dbg_max_stall, dbg_stalls, dbg_underruns);
         }
-        if (frames % 60 == 0) hw_sample();
         if (osso_display_blanking_pause && frames % 1500 == 0)
             osso_display_blanking_pause(osso_ctx);
         if (frames == 10 && pXSetInputFocus) {

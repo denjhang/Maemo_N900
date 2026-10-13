@@ -393,6 +393,36 @@ void igui_special_key(unsigned ks, int down) {
     }
 }
 
+/* ---- settings persistence: /home/user/imrun/settings.ini ---- */
+extern "C" {
+extern int g_wall_mode, g_wall_variant;
+extern void alog_public(const char *fmt, ...);
+}
+static void settings_save(void) {
+    FILE *f = fopen("/home/user/imrun_settings.ini", "w");
+    alog_public("SETSAVE fopen=%p", f);
+    if (!f) return;
+    fprintf(f, "wall_mode=%d\nwall_variant=%d\na_win=%.2f\na_bar=%.2f\na_desk=%.2f\ndock_cover=%d\n",
+            g_wall_mode, g_wall_variant, g_a_win, g_a_bar, g_a_desk,
+            g_dock_covers_sysbar ? 1 : 0);
+    fclose(f);
+}
+static void settings_load(void) {
+    FILE *f = fopen("/home/user/imrun_settings.ini", "r");
+    if (!f) return;
+    char line[96];
+    int iv; float v;
+    while (fgets(line, sizeof line, f)) {
+        if (sscanf(line, "wall_mode=%d", &iv) == 1) { if (iv >= 0 && iv < 5) g_wall_mode = iv; }
+        else if (sscanf(line, "wall_variant=%d", &iv) == 1) { if (iv >= 0 && iv < 4) g_wall_variant = iv; }
+        else if (sscanf(line, "a_win=%f", &v) == 1) g_a_win = v;
+        else if (sscanf(line, "a_bar=%f", &v) == 1) g_a_bar = v;
+        else if (sscanf(line, "a_desk=%f", &v) == 1) g_a_desk = v;
+        else if (sscanf(line, "dock_cover=%d", &iv) == 1) g_dock_covers_sysbar = iv > 0;
+    }
+    fclose(f);
+}
+
 static void dyn_scan(void) {
     DIR *d = opendir(APPS_DIR);
     if (!d) return;
@@ -621,6 +651,17 @@ static void shell_end_dyn(void) { ImGui::End(); }
 
 void igui_build_ui(double t, float fps) {
     (void)fps;
+    static bool s_loaded = false;
+    if (!s_loaded) { s_loaded = true; settings_load(); }
+    {   /* signature-based autosave: any settings change flushes within 1s */
+        static int s_last_sig = -999999;
+        static int s_save_cnt = 0;
+        int sig = g_wall_mode + g_wall_variant * 8
+                + (int)(g_a_win * 131) + (int)(g_a_bar * 197) + (int)(g_a_desk * 251)
+                + (g_dock_covers_sysbar ? 10000 : 0);
+        if (sig != s_last_sig) { s_last_sig = sig; s_save_cnt = 0; }
+        if (++s_save_cnt > 60) { s_save_cnt = 0; settings_save(); }
+    }
     if (++g_dyn_scan_cnt >= 120) { g_dyn_scan_cnt = 0; dyn_scan(); }
     shell_read_sysfs();
 
