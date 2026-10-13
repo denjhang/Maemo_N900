@@ -89,6 +89,7 @@ int igui_init(int w, int h, IGlfns *fns) {
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)w, (float)h);
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.MouseDragThreshold = 3.0f; /* touch: 6px default eats finger gestures */
     io.DeltaTime = 1.0f / 60.0f;
     ImGui::StyleColorsDark();
 #if IMGUI_VERSION_NUM >= 19200
