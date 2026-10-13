@@ -126,3 +126,13 @@
 - 二进制：/home/user/imrun（=gldemo_imgui v11，md5 a45c9ab2）
 - 安装姿势：SFTP 三件套（desktop+icons+bin）→ `killall hildon-desktop` 重启桌面壳刷新图标（X 客户端不受影响）
 - 仓库资产：packaging/desktop/（imrun.desktop + 三尺寸 PNG + 二进制副本）
+
+## IMRUN Shell v12（2026-10-13，运行时成型：桌面+系统栏+APP 窗口）
+- 二进制 md5: 2e3b6c94f559cddbbb8e50d760e2b465（部署为 /home/user/imrun）
+- **底部系统栏 48px**（Honeycomb 形态）：BACK（=关当前窗口）、HOME（回桌面）、运行中 APP 图标+红点 X 关闭、右侧时钟 HH:MM + 电量%（bq27200）+ CPU 温度（每 90 帧刷新 sysfs）
+- **桌面网格**：7 个内置 APP（IMGUI/WIDGETS/TONEGEN/VIBRA/KEYS/FONTS/SYSINFO），4 列 72px 大按钮，已打开的带 * 标记
+- **每个 APP = 独立窗口，标题栏自带 X + 窗口内 CLOSE 大按钮（44px）**
+- **Ctrl+W 关闭当前焦点窗口**（N900 有实体 CTRL 键，PC 习惯直接搬来）；BACK 键同义
+- 电阻屏纪律落地：全部点击式，目标 >=44px，零手势
+- 实现注：sysfs 读数用 fgets+atoi（fscanf 被 gcc11 重定向成 __isoc99_fscanf，无 shim）
+- AUTOTEST 回归 6/6 干净，音频基线无回退

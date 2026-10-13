@@ -174,7 +174,22 @@ void ui_stress_toggle(void) {
     st.FontScaleMain = v; /* forces full glyph rebake = heaviest UI op */
 }
 
+/* ============ IMRUN shell state (declared early: key path uses it) ======= */
+struct ShellApp { const char *name; bool open; };
+static ShellApp g_apps[] = {
+    {"IMGUI", false}, {"WIDGETS", false}, {"TONEGEN", false},
+    {"VIBRA", false}, {"KEYS", false}, {"FONTS", false}, {"SYSINFO", false},
+};
+static const int NAPPS = (int)(sizeof g_apps / sizeof g_apps[0]);
+static int g_focus = -1;          /* focused window, -1 = desktop only */
+bool g_ctrl_down = false;         /* fed by igui_special_key */
+
 void igui_key_char(const char *utf8) {
+    /* Ctrl+W = close focused window (N900 has a real CTRL key; same as PC) */
+    if (g_ctrl_down && utf8 && (utf8[0] == 'w' || utf8[0] == 'W') && !utf8[1]) {
+        if (g_focus >= 0) g_apps[g_focus].open = false;
+        return;
+    }
     ImGui::GetIO().AddInputCharactersUTF8(utf8);
 }
 
@@ -203,6 +218,7 @@ void igui_special_key(unsigned ks, int down) {
     case 0xffe3: case 0xffe4: case 0xffe5: k = ImGuiMod_Ctrl; break;
     case 0xffe7: case 0xffe8: case 0xffe9: case 0xff7e: k = ImGuiMod_Alt; break;
     }
+    if (k == ImGuiMod_Ctrl) g_ctrl_down = (down != 0);
     if (k != ImGuiKey_None)
         io.AddKeyEvent(k, down != 0);
 }
@@ -292,6 +308,53 @@ static inline ImVec4 vec4f(float x, float y, float z, float w) { return ImVec4(x
 #define ImVec2_to_imvec_helper vec4f
 static float g_plot[64];
 static float hue = 0.4f;
+
+/* ============ IMRUN shell: desktop + bottom system bar + apps ============
+   resistive screen = mouse logic: pure clicks, >=48px targets, no gestures */
+static void shell_close(int i) {
+    g_apps[i].open = false;
+    if (g_focus == i) g_focus = -1;
+}
+static void shell_focus(int i) { g_focus = i; g_apps[i].open = true; }
+void igui_close_focused(void) { if (g_focus >= 0) shell_close(g_focus); }
+
+/* sysfs reads are cached: battery + cpu temp, refresh every 90 frames
+   (fgets+sscanf: fscanf is __isoc99_fscanf here, no shim for it) */
+static int g_batt = -1, g_temp = -1;
+static void shell_read_sysfs(void) {
+    static int cnt = 0;
+    if (++cnt % 90) return;
+    char line[64];
+    FILE *f = fopen("/sys/class/power_supply/bq27200-0/capacity", "r");
+    if (f) { if (fgets(line, sizeof line, f)) g_batt = atoi(line); fclose(f); }
+    f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+    if (f) { if (fgets(line, sizeof line, f)) g_temp = atoi(line) / 1000; fclose(f); }
+}
+
+/* one app window: Begin with close + touch-sized CLOSE button inside */
+static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
+    if (!g_apps[i].open) return false;
+    ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+    char title[64];
+    snprintf(title, sizeof title, "%s###app%d", g_apps[i].name, i);
+    bool shown = ImGui::Begin(title, &g_apps[i].open);
+    if (!shown) { ImGui::End(); shell_close(i); return false; }
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
+    return true;
+}
+static void shell_end_app(void) { ImGui::End(); }
+
+/* clock string HH:MM */
+static const char *shell_clock(void) {
+    static char buf[8];
+    time_t tt = time(NULL);
+    struct tm *lt = localtime(&tt);
+    if (lt) snprintf(buf, sizeof buf, "%02d:%02d", lt->tm_hour, lt->tm_min);
+    else snprintf(buf, sizeof buf, "--:--");
+    return buf;
+}
+
 void igui_build_ui(double t, float fps) {
     (void)t;
     for (int i = 0; i < 64; i++)
@@ -299,12 +362,88 @@ void igui_build_ui(double t, float fps) {
     // full-screen dockspace: drag windows to screen edges to dock
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                  ImGuiDockNodeFlags_PassthruCentralNode);
-    ImGui::SetNextWindowPos(ImVec2(20, 40), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(400, 380), ImGuiCond_FirstUseEver);
-    ImGui::Begin("N900 GLES1.1 IMGUI");
-    {
-        /* legacy preload bakes glyphs ONLY at AddFont size — runtime font-size
-           changes are a no-op here, so faces are fixed-size by design */
+    shell_read_sysfs();
+
+    /* ---- desktop: fullscreen grid launcher (behind app windows) ---- */
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(800, 432));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, vec4f(0.05f, 0.07f, 0.11f, 1.0f));
+    ImGui::Begin("###desktop", NULL,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                 ImGuiWindowFlags_NoNav);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 26));
+    if (ImGui::BeginTable("desk", 4, ImGuiTableFlags_SizingStretchSame)) {
+        for (int i = 0; i < NAPPS; i++) {
+            ImGui::TableNextColumn();
+            bool on = g_apps[i].open;
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.15f, 0.35f, 0.5f, 1));
+            char label[48];
+            snprintf(label, sizeof label, "%s%s", g_apps[i].name, on ? " *" : "");
+            if (ImGui::Button(label, ImVec2(-1, 72)))
+                shell_focus(i);
+            if (on) ImGui::PopStyleColor();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
+    ImGui::SetCursorPosY(400);
+    ImGui::TextColored(vec4f(0.4f, 0.5f, 0.6f, 1), "IMRUN shell v0.1 - Nokia N900 - imgui %s",
+                       ImGui::GetVersion());
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    /* ---- bottom system bar 48px: BACK HOME [running x] clock batt temp ---- */
+    ImGui::SetNextWindowPos(ImVec2(0, 432));
+    ImGui::SetNextWindowSize(ImVec2(800, 48));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2, 2));
+    ImGui::Begin("###sysbar", NULL,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav);
+    if (ImGui::Button("<", ImVec2(48, 42)))   /* BACK = close focused (Ctrl+W) */
+        igui_close_focused();
+    ImGui::SameLine();
+    if (ImGui::Button("O", ImVec2(48, 42)))   /* HOME = desktop */
+        g_focus = -1;
+    ImGui::SameLine();
+    for (int i = 0; i < NAPPS; i++) {
+        if (!g_apps[i].open) continue;
+        bool foc = (g_focus == i);
+        if (foc) ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.2f, 0.5f, 0.7f, 1));
+        char tag[16];
+        snprintf(tag, sizeof tag, "%.3s##run%d", g_apps[i].name, i);
+        if (ImGui::Button(tag, ImVec2(44, 42)))
+            g_focus = i;
+        if (foc) ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.55f, 0.1f, 0.1f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Text, vec4f(1, 1, 1, 1));
+        char xt[12];
+        snprintf(xt, sizeof xt, "x##kill%d", i);
+        if (ImGui::Button(xt, ImVec2(16, 42)))
+            shell_close(i);
+        ImGui::PopStyleColor(2);
+        ImGui::SameLine();
+    }
+    /* right side: clock / battery / temp (read-only, no touch target) */
+    float rightx = 800;
+    const char *clock = shell_clock();
+    ImGui::SetCursorPos(ImVec2(rightx - 190, 11));
+    ImGui::Text("%s", clock);
+    ImGui::SetCursorPos(ImVec2(rightx - 130, 11));
+    if (g_batt >= 0) ImGui::Text("%d%%", g_batt); else ImGui::Text("--%%");
+    ImGui::SetCursorPos(ImVec2(rightx - 76, 11));
+    if (g_temp >= 0) ImGui::Text("%dC", g_temp); else ImGui::Text("--C");
+    ImGui::End();
+    ImGui::PopStyleVar();
+
+    /* ================= apps (each opened on demand) ================= */
+
+    /* APP: IMGUI - runtime settings + render stats */
+    if (shell_begin_app(0, ImVec2(20, 20), ImVec2(400, 380))) {
         ImGuiIO &io = ImGui::GetIO();
         ImGuiStyle &st = ImGui::GetStyle();
         static int face = 0;
@@ -325,199 +464,157 @@ void igui_build_ui(double t, float fps) {
                                ImGuiSliderFlags_AlwaysClamp))
             st.FontScaleMain = uiscale;
         ImGui::Separator();
+        ImGui::Text("FPS: %.1f  (%.2f ms)", fps, fps > 0 ? 1000.0 / fps : 0);
+        ImGui::Text("SGX530 - GLES 1.1 - EGL - NON-COMPOSITED");
+        static float v1 = 0.6f, v2 = 0.35f;
+        ImGui::SliderFloat("Engine load", &v1, 0, 1);
+        ImGui::SliderFloat("Color hue", &v2, 0, 1);
+        static float tint[4] = {0.3f, 0.6f, 1.0f, 1.0f};
+        tint[0] = v2; tint[2] = 1.0f - v2;
+        ImGui::ColorEdit4("Tint", tint, ImGuiColorEditFlags_NoInputs);
+        ImGui::ProgressBar(fps / 85.0f, ImVec2(-1, 0), "VSYNC");
+        if (ImGui::TreeNode("Render stats")) {
+            ImGui::Text("Display: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
+            ImGui::Text("FontScaleMain: %.2f", ImGui::GetStyle().FontScaleMain);
+            ImGui::Text("Vertices: %d", ImGui::GetIO().MetricsRenderVertices);
+            ImGui::Text("Indices: %d", ImGui::GetIO().MetricsRenderIndices);
+            ImGui::Text("Windows: %d", ImGui::GetIO().MetricsRenderWindows);
+            ImGui::TreePop();
+        }
+        float wave[64];
+        for (int i = 0; i < 64; i++)
+            wave[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
+        ImGui::PlotLines("Wave", wave, 64, 0, "SGX load", 0.0f, 1.0f, ImVec2(360, 60));
+        if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44))) shell_close(0);
+        shell_end_app();
     }
-    ImGui::Separator();
-    ImGui::Text("FPS: %.1f  (%.2f ms)", fps, fps > 0 ? 1000.0 / fps : 0);
-    ImGui::Text("SGX530 - GLES 1.1 - EGL - NON-COMPOSITED");
-    ImGui::Separator();
-    static float v1 = 0.6f, v2 = 0.35f;
-    static float tint[4] = {0.3f, 0.6f, 1.0f, 1.0f};
-    ImGui::SliderFloat("Engine load", &v1, 0, 1);
-    ImGui::SliderFloat("Color hue", &v2, 0, 1);
-    tint[0] = v2; tint[2] = 1.0f - v2;
-    ImGui::ColorEdit4("Tint", tint, ImGuiColorEditFlags_NoInputs);
-    static int item = 1;
-    const char *items[] = {"LOW 240P", "MED 480P", "FULL 800x480"};
-    ImGui::Combo("Quality", &item, items, 3);
-    ImGui::ProgressBar(fps / 85.0f, ImVec2(-1, 0), "VSYNC");
-    if (ImGui::TreeNode("Render stats")) {
-        ImGuiIO &io = ImGui::GetIO();
-        ImGui::Text("Display: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
-        ImGui::Text("FontScaleMain: %.2f", ImGui::GetStyle().FontScaleMain);
-        ImGui::Text("Vertices: %d", ImGui::GetIO().MetricsRenderVertices);
-        ImGui::Text("Indices: %d", ImGui::GetIO().MetricsRenderIndices);
-        ImGui::Text("Windows: %d", ImGui::GetIO().MetricsRenderWindows);
-        ImGui::TreePop();
-    }
-    float wave[64];
-    for (int i = 0; i < 64; i++)
-        wave[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
-    ImGui::PlotLines("Wave", wave, 64, 0, "SGX load", 0.0f, 1.0f, ImVec2(360, 60));
-    ImGui::End();
 
-    // second window bottom-right: system badge
-    /* ---- widgets lab ---- */
-    ImGui::SetNextWindowPos(ImVec2(20, 436), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 240), ImGuiCond_FirstUseEver);
-    ImGui::Begin("WIDGETS LAB");
-    if (ImGui::BeginTabBar("labtabs")) {
-        if (ImGui::BeginTabItem("BASIC")) {
-            static int clicks = 0;
-            if (ImGui::Button("PUSH ME"))
-                clicks++;
-            ImGui::SameLine();
-            ImGui::Text("count=%d", clicks);
-            static bool chk = true;
-            ImGui::Checkbox("enable", &chk);
-            static int radio = 0;
-            ImGui::RadioButton("sd", &radio, 0); ImGui::SameLine();
-            ImGui::RadioButton("mmc", &radio, 1); ImGui::SameLine();
-            ImGui::RadioButton("usb", &radio, 2);
-            static float prog = 0.4f;
-            prog = 0.5f + 0.45f * sinf((float)t);
-            ImGui::ProgressBar(prog, ImVec2(-1, 0), "COPY");
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("TABLE")) {
-            if (ImGui::BeginTable("hw", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                ImGui::TableSetupColumn("COMPONENT");
-                ImGui::TableSetupColumn("VALUE");
-                ImGui::TableHeadersRow();
-                const char *rows[6][2] = {
-                    {"CPU", "Cortex-A8 600MHz"}, {"GPU", "PowerVR SGX530"},
-                    {"RAM", "256MB LPDDR"}, {"SCREEN", "800x480 AMOLED"},
-                    {"GLES", "1.1 fixed-func"}, {"COMPOSITOR", "DISABLED"}};
-                for (int i = 0; i < 6; i++) {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(rows[i][0]);
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(rows[i][1]);
-                }
-                ImGui::EndTable();
-            }
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("INPUT")) {
-            static int iv = 600;
-            static float fv = 1.25f;
-            ImGui::InputInt("CLOCK MHZ", &iv);
-            ImGui::InputFloat("VOLT", &fv, 0.05f, 0.5f, "%.2f V");
-            static int listitem = 1;
-            const char *list[] = {"PPSSPP 0.9.6", "cps2emu 0.6", "drnoksnes 1.3", "gldemo 2026"};
-            ImGui::ListBox("APPS", &listitem, list, 4);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("TIPS")) {
-            ImGui::TextUnformatted("hover me:");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec2_to_imvec_helper(0.3f, 0.9f, 1.0f, 1.0f), "TOUCH TARGETS");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Touch = left click.\nDrag title bar to dock.\nDrag borders to resize.");
-            }
-            static float col[3] = {0.3f, 0.6f, 1.0f};
-            ImGui::ColorEdit3("LED", col, ImGuiColorEditFlags_NoInputs);
-            ImGui::PlotLines("LOAD", g_plot, 64, 0, NULL, 0.0f, 1.0f, ImVec2(320, 50));
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+    /* APP: WIDGETS - imgui widget lab */
+    if (shell_begin_app(1, ImVec2(60, 60), ImVec2(360, 240))) {
+        static int clicks = 0;
+        if (ImGui::Button("PUSH ME")) clicks++;
+        ImGui::SameLine();
+        ImGui::Text("count=%d", clicks);
+        static bool chk = true;
+        ImGui::Checkbox("enable", &chk);
+        static int radio = 0;
+        ImGui::RadioButton("sd", &radio, 0); ImGui::SameLine();
+        ImGui::RadioButton("mmc", &radio, 1); ImGui::SameLine();
+        ImGui::RadioButton("usb", &radio, 2);
+        static float prog = 0.4f;
+        prog = 0.5f + 0.45f * sinf((float)t);
+        ImGui::ProgressBar(prog, ImVec2(-1, 0), "COPY");
+        static int listitem = 1;
+        const char *list[] = {"PPSSPP 0.9.6", "cps2emu 0.6", "drnoksnes 1.3", "gldemo 2026"};
+        ImGui::ListBox("APPS", &listitem, list, 4);
+        ImGui::PlotLines("LOAD", g_plot, 64, 0, NULL, 0.0f, 1.0f, ImVec2(320, 50));
+        if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44))) shell_close(1);
+        shell_end_app();
     }
-    ImGui::End();
 
-    /* ---- system: hw / audio / vibra / keys / chinese ---- */
-    ImGui::SetNextWindowPos(ImVec2(400, 40), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 260), ImGuiCond_FirstUseEver);
-    ImGui::Begin("SYSTEM");
-    if (ImGui::BeginTabBar("systabs")) {
-        if (ImGui::BeginTabItem("HW")) {
-            for (int i = 0; i < hw_n; i++) ImGui::TextUnformatted(hw[i]);
-            ImGui::EndTabItem();
+    /* APP: TONEGEN - ALSA waveform generator */
+    if (shell_begin_app(2, ImVec2(120, 100), ImVec2(320, 220))) {
+        extern double audio_deadline;
+        if (audio_on) {
+            int left = (int)(audio_deadline - now_double());
+            ImGui::Text("ALSA PCM: PLAYING 440Hz (%ds left)", left);
+        } else
+            ImGui::Text("ALSA PCM: idle");
+        if (ImGui::Button("PLAY 20s", ImVec2(140, 48)))
+            audio_ui_start(20);
+        ImGui::SameLine();
+        if (ImGui::Button("STOP", ImVec2(140, 48)))
+            audio_ui_stop(); /* async: never join/ioctl in UI thread */
+        {
+            extern int audio_volume;
+            extern int audio_wave;
+            const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
+            ImGui::Combo("WAVE", &audio_wave, waves, 4);
+            ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
         }
-        if (ImGui::BeginTabItem("AUDIO")) {
-            extern double audio_deadline;
-            if (audio_on) {
-                int left = (int)(audio_deadline - now_double());
-                ImGui::Text("ALSA PCM: PLAYING 440Hz (%ds left)", left);
-            } else
-                ImGui::Text("ALSA PCM: idle");
-            if (ImGui::Button("PLAY 20s"))
-                audio_ui_start(20);
-            {
-                extern int audio_volume;
-                extern int audio_wave;
-                const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
-                ImGui::Combo("WAVE", &audio_wave, waves, 4);
-                ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("STOP"))
-                audio_ui_stop(); /* async: never join/ioctl in UI thread */
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("VIBRA")) {
-            static int ms = 1000;
-            ImGui::SliderInt("DURATION", &ms, 100, 5000, "%d ms");
-            if (ImGui::Button("VIBRATE"))
-                vibra_ping(ms);
-            ImGui::SameLine();
-            if (ImGui::Button("STOP ALL"))
-                vibra_stop();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("KEYS")) {
-            ImGui::Text("last: %s", last_key[0] ? last_key : "(press slide-out keyboard)");
-            ImGui::TextUnformatted("type into: ");
-            ImGui::SameLine();
-            static char textbuf[64] = "";
-            ImGui::InputText("##kb", textbuf, sizeof textbuf);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("CN")) {
-            if (g_cnfont && ImGui::Button("USE CHINESE FONT"))
-                ImGui::GetIO().FontDefault = g_cnfont;
-            if (g_cnfont) {
-                ImGui::PushFont(g_cnfont);
-                ImGui::Text("诺基亚 N900 复活了");
-                ImGui::Text("SGX530 图形直通，音频直连。");
-                ImGui::Text("中文动态烘焙：按需光栅化。");
-                ImGui::PopFont();
-            }
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("WORLD")) {
-            if (g_worldfont && ImGui::Button("USE WORLD FONT"))
-                ImGui::GetIO().FontDefault = g_worldfont;
-            ImGui::Text("FR: Bonjour le monde! Ça marche très bien.");
-            ImGui::Text("DE: Grüße aus 2009 — Umlaute: äöü ß.");
-            ImGui::Text("ES: ¡Hola! El niño juega con el pingüino.");
-            ImGui::Text("RU: Привет, мир! Nokia N900 жив.");
-            if (g_worldfont) {
-                ImGui::PushFont(g_worldfont);
-                ImGui::Text("JP: こんにちは世界、日本語も大丈夫。");
-                ImGui::Text("CN: 中文汉字渲染：动态烘焙按需光栅化。");
-                ImGui::PopFont();
-            }
-            if (g_krfont) {
-                ImGui::PushFont(g_krfont);
-                ImGui::Text("KR: 안녕하세요, 말군 고딕입니다.");
-                ImGui::PopFont();
-            }
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+        if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44))) shell_close(2);
+        shell_end_app();
     }
-    ImGui::End();
 
-    ImGui::SetNextWindowPos(ImVec2(560, 396), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(228, 74), ImGuiCond_FirstUseEver);
-    ImGui::Begin("SYS", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
-    ImGui::Text("Nokia N900 - 2009");
-    ImGui::Text("Cortex A8 + SGX530");
-    ImGui::Text("imgui %s", ImGui::GetVersion());
-    static bool show_demo = false;
-    ImGui::Checkbox("OFFICIAL DEMO", &show_demo);
-    if (show_demo) ImGui::ShowDemoWindow(&show_demo);
-    ImGui::End();
+    /* APP: VIBRA */
+    if (shell_begin_app(3, ImVec2(160, 140), ImVec2(320, 180))) {
+        static int ms = 1000;
+        ImGui::SliderInt("DURATION", &ms, 100, 5000, "%d ms");
+        if (ImGui::Button("VIBRATE", ImVec2(140, 48)))
+            vibra_ping(ms);
+        ImGui::SameLine();
+        if (ImGui::Button("STOP ALL", ImVec2(140, 48)))
+            vibra_stop();
+        if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44))) shell_close(3);
+        shell_end_app();
+    }
+
+    /* APP: KEYS - hardware keyboard test */
+    if (shell_begin_app(4, ImVec2(200, 80), ImVec2(360, 200))) {
+        ImGui::Text("last: %s", last_key[0] ? last_key : "(press slide-out keyboard)");
+        ImGui::TextUnformatted("type into: ");
+        ImGui::SameLine();
+        static char textbuf[64] = "";
+        ImGui::InputText("##kb", textbuf, sizeof textbuf);
+        ImGui::Text("CTRL+W closes the focused window");
+        if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44))) shell_close(4);
+        shell_end_app();
+    }
+
+    /* APP: FONTS - multilingual */
+    if (shell_begin_app(5, ImVec2(240, 40), ImVec2(420, 320))) {
+        if (g_cnfont && ImGui::Button("USE CHINESE FONT"))
+            ImGui::GetIO().FontDefault = g_cnfont;
+        if (g_cnfont) {
+            ImGui::PushFont(g_cnfont);
+            ImGui::Text("诺基亚 N900 复活了");
+            ImGui::PopFont();
+        }
+        ImGui::Text("FR: Bonjour! Ça marche très bien.");
+        ImGui::Text("DE: Grüße — äöü ß.");
+        ImGui::Text("ES: ¡Hola! El niño juega.");
+        ImGui::Text("RU: Привет, мир!");
+        if (g_worldfont) {
+            ImGui::PushFont(g_worldfont);
+            ImGui::Text("JP: こんにちは世界");
+            ImGui::Text("CN: 中文汉字动态烘焙。");
+            ImGui::PopFont();
+        }
+        if (g_krfont) {
+            ImGui::PushFont(g_krfont);
+            ImGui::Text("KR: 안녕하세요");
+            ImGui::PopFont();
+        }
+        if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44))) shell_close(5);
+        shell_end_app();
+    }
+
+    /* APP: SYSINFO - hardware + version */
+    if (shell_begin_app(6, ImVec2(300, 120), ImVec2(380, 260))) {
+        for (int i = 0; i < hw_n; i++) ImGui::TextUnformatted(hw[i]);
+        ImGui::Separator();
+        ImGui::Text("Nokia N900 - 2009 - Cortex A8 + SGX530");
+        ImGui::Text("imgui %s", ImGui::GetVersion());
+        if (ImGui::BeginTable("hw", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("COMPONENT");
+            ImGui::TableSetupColumn("VALUE");
+            ImGui::TableHeadersRow();
+            const char *rows[6][2] = {
+                {"CPU", "Cortex-A8 600MHz"}, {"GPU", "PowerVR SGX530"},
+                {"RAM", "256MB LPDDR"}, {"SCREEN", "800x480 AMOLED"},
+                {"GLES", "1.1 fixed-func"}, {"COMPOSITOR", "DISABLED"}};
+            for (int i = 0; i < 6; i++) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(rows[i][0]);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(rows[i][1]);
+            }
+            ImGui::EndTable();
+        }
+        if (ImGui::Button("CLOSE (Ctrl+W)", ImVec2(-1, 44))) shell_close(6);
+        shell_end_app();
+    }
 }
 
 } // extern "C"
