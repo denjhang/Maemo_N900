@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
+#include <unistd.h>
 #include <stdint.h>
 
 extern "C" {
@@ -421,49 +422,22 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     }
     char title[64];
     snprintf(title, sizeof title, "%s###app%d", a.name, i);
-    /* custom window chrome: we own the title strip (name + minimize + X).
-       ImGui's native title bar is off; everything else (resize borders,
-       ini persistence) stays native. */
-    bool shown = ImGui::Begin(title, NULL,
-                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking);
+    /* NATIVE title bar + native docking, untouched. p_open gives the X. */
+    bool shown = ImGui::Begin(title, &a.open);
     if (pushed_alpha) ImGui::PopStyleVar();
     if (!shown) { ImGui::End(); shell_close(i); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
-    /* ---- title strip: drag = move window, [_] minimize, [X] close ---- */
+    /* minimize button inside the NATIVE title bar, left of the X */
     {
-        ImDrawList *dl = ImGui::GetWindowDrawList();
-        float w = ImGui::GetContentRegionAvail().x;
+        ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
         float th = ImGui::GetFrameHeight();
-        ImVec2 p0 = ImGui::GetCursorScreenPos();
-        bool foc = (g_focus == i);
-        dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + th),
-                          foc ? IM_COL32(24, 62, 92, 255) : IM_COL32(28, 34, 48, 255),
-                          ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersTop);
-        /* drag strip (invisible button spans everything left of the buttons) */
-        float bw = th; /* square buttons */
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.10f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(1, 1, 1, 0.20f));
-        ImGui::InvisibleButton("##tbar", ImVec2(w - bw * 2 - 6, th));
-        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-            ImVec2 d = ImGui::GetIO().MouseDelta;
-            ImGui::SetWindowPos(ImVec2(ImGui::GetWindowPos().x + d.x,
-                                       ImGui::GetWindowPos().y + d.y));
-        }
-        ImVec2 ts = CalcTextSizeLocal(ImGui::GetFont(), ImGui::GetFontSize(), a.name);
-        dl->AddText(ImVec2(p0.x + 10, p0.y + (th - ts.y) * 0.5f),
-                    IM_COL32(235, 240, 245, 240), a.name);
-        ImGui::SameLine(0, 6);
-        if (ImGui::Button("_##min", ImVec2(bw, th))) /* Windows order: _ then X */
+        ImVec2 keep = ImGui::GetCursorPos();
+        ImGui::SetCursorScreenPos(ImVec2(wp.x + ws.x - th * 2 - 6, wp.y + 2));
+        ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.25f, 0.35f, 0.48f, 0.9f));
+        if (ImGui::Button("_##min", ImVec2(th - 4, th - 4)))
             shell_minimize(i);
-        ImGui::SameLine(0, 2);
-        ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.55f, 0.15f, 0.15f, 1));
-        if (ImGui::Button("x##cls", ImVec2(bw, th)))
-            shell_close(i);
         ImGui::PopStyleColor();
-        ImGui::PopStyleColor(3);
-        /* content starts below the strip */
-        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + th + ImGui::GetStyle().ItemSpacing.y));
+        ImGui::SetCursorPos(keep);
     }
     return true;
 }
@@ -579,6 +553,14 @@ void igui_build_ui(double t, float fps) {
     (void)t;
     for (int i = 0; i < 64; i++)
         g_plot[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
+    /* visual self-test: touch /home/user/gopen -> boot with 3 apps open */
+    static bool s_selftest;
+    if (!s_selftest) {
+        s_selftest = true;
+        if (access("/home/user/gopen", 0) == 0) {
+            shell_focus(0); shell_focus(2); shell_focus(3);
+        }
+    }
     // full-screen dockspace: drag windows to screen edges to dock
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                  ImGuiDockNodeFlags_PassthruCentralNode);
