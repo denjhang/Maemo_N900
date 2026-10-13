@@ -204,3 +204,11 @@
 - 窗口底部大红 CLOSE 全部移除——关闭途径收敛：标题栏 X / Ctrl+W /（TONEGEN 等资源型 APP 关窗即销毁资源）
 - 最小化按钮 = v21 的 ImGui 核心补丁（原生标题栏绘制路径内、X 左侧），浮动/停靠均渲染
 - 发布包: research/releases/imrun_release_v23.tar.gz（含 patched imgui 源码、shell/文档/图标）
+
+## IMRUN Shell v24（2026-10-14，热重载 + 壁纸引擎 + 全局透明度）
+- 二进制 md5: 35f2c17015149b7a71461afa0a500a1e（/home/user/imrun/imrun，**目录化布局**：imrun/ + apps/，desktop 入口同步更新）
+- **真·热重载**：每 ~2s 扫 /home/user/imrun/apps/*/app.so → dlopen → 桌面自动出现新图标，**零重启**。主程序 --export-dynamic 链接，插件直接用 ImGui 符号（加载时从主程序解析）；插件 ABI：`imapp_name()` 可选、`imapp_frame(double t)` 必需、`imapp_init/imapp_destroy` 可选（-shared -fPIC -nostdlib，示例 research/apps/hello/hello.cpp，6KB）。已验证：/proc/<pid>/maps 里 app.so 在列、进程存活
+- **壁纸引擎**（gldemo 侧 g_wall_mode/g_wall_variant）：3D动态（原方块）/3D静态（冻结）/2D动态（漂移柔色块 alpha 混合）/2D静态，四套配色（AZURE/VIOLET/EMERALD/AMBER）
+- **WALLPAP 应用**（第 8 个内建）：模式+配色下拉，**三个透明度滑条**——窗口 / 任务栏 / 桌面色调，全部实时生效
+- **透明度规范落地**（默认值）：桌面全透（0，壁纸直出）、应用窗口半透（0.88）、系统栏稍不透（0.80）、桌面卡片毛玻璃（悬停/按下发亮）
+- 崩坑记录：注释里写 apps/*/app.so 会提前终止块注释（*/ 符号）；插件链接 -nostdlib 绕开 binutils BFD 断言

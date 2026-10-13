@@ -8,7 +8,7 @@ for f in imgui imgui_draw imgui_tables imgui_widgets imgui_demo; do
     arm-linux-gnueabi-g++ $F -c /mnt/e/working/zcode-projects/Maemo_N900/build/imgui/$f.cpp -o $f.o
 done
 arm-linux-gnueabi-g++ --sysroot=$S -nostartfiles -nodefaultlibs \
-    -Wl,--dynamic-linker,/lib/ld-linux.so.3 \
+    -Wl,--dynamic-linker,/lib/ld-linux.so.3 -Wl,--export-dynamic \
     gi.o ig.o imgui.o imgui_draw.o imgui_tables.o imgui_widgets.o imgui_demo.o \
     $S/usr/lib/libstdc++.so.6 /mnt/e/working/zcode-projects/Maemo_N900/build/libdl.so.2 -lm -lgcc -lgcc_s -lc \
     -o gldemo_imguibin

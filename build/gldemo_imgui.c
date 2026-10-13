@@ -92,6 +92,9 @@ int audio_on;
 int audio_amp = 16000;
 int dbg_underruns = 0;
 int dbg_key_events = 0;
+/* wallpaper: 0=3D dynamic cubes 1=3D static 2=2D dynamic 3=2D static 4=plain
+   variant: color palette 0..3 */
+int g_wall_mode = 0, g_wall_variant = 0;
 int audio_volume = 100;
 int audio_wave = 0; /* 0 sine 1 tri 2 square 3 saw */ /* 0..1000 software gain (100=unity); >320 clamps hard, >1000 undefined */
 static float audio_phase;
@@ -209,6 +212,9 @@ typedef float GLfloat;
 #define GL_MODELVIEW 0x1700
 #define GL_FLOAT 0x1406
 #define GL_DEPTH_TEST 0x0B71
+#define GL_BLEND 0x0BE2
+#define GL_SRC_ALPHA 0x0302
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
 #define GL_VERTEX_ARRAY 0x8074
 #define GL_COLOR_ARRAY 0x8076
 
@@ -1003,33 +1009,73 @@ int main(void) {
         float dt = (float)(t - last);
         if (dt > 0.25f || dt <= 0) dt = 0.033f;
         last = t;
-        /* background: dark gradient clear + drifting cubes */
+        /* ---- wallpaper engine: 3D/2D x dynamic/static, 4 palettes ---- */
+        {
+        float wel = (g_wall_mode == 1 || g_wall_mode == 3) ? 5.0f : el;
+        float hue = g_wall_variant * 0.23f;
+        float r0 = 0.05f + 0.5f * hue, g0 = 0.06f + 0.35f * (1 - hue), b0 = 0.12f;
         pglDisable(GL_DEPTH_TEST);
         pglDisableClientState(GL_VERTEX_ARRAY);
         pglDisableClientState(GL_COLOR_ARRAY);
-        pglClearColor(0.04f + 0.06f * (0.5f + 0.5f * sinf(el * 2.0f)),
-                      0.05f, 0.10f, 1);
+        pglClearColor(0.03f + 0.04f * r0, 0.04f + 0.04f * g0, 0.07f + 0.06f * b0, 1);
         pglClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        pglEnable(GL_DEPTH_TEST);
-        pglMatrixMode(GL_PROJECTION);
-        pglLoadIdentity();
-        pglFrustumf(-1, 1, -0.6f, 0.6f, 1, 60);
-        pglEnableClientState(GL_VERTEX_ARRAY);
-        pglEnableClientState(GL_COLOR_ARRAY);
-        pglVertexPointer(3, GL_FLOAT, 32, cube_v);
-        pglColorPointer(4, GL_FLOAT, 32, cube_v + 3);
-        for (int i = 0; i < 10; i++) {
-            float a = el * 0.12f + i * 0.63f;
-            float rr = 4 + 6 * ((i * 37 % 100) / 100.0f);
-            pglMatrixMode(GL_MODELVIEW);
+        if (g_wall_mode < 2) {
+            /* 3D cubes (dynamic or frozen) */
+            pglEnable(GL_DEPTH_TEST);
+            pglMatrixMode(GL_PROJECTION);
             pglLoadIdentity();
-            pglTranslatef(rr * cosf(a), 2.5f * sinf(a * 1.7f + i), -6 - 14 * ((i * 53 % 100) / 100.0f));
-            pglRotatef(el * 20 + i * 45, 1, 0.7f, 0.3f);
-            pglDrawArrays(GL_TRIANGLES, 0, 36);
+            pglFrustumf(-1, 1, -0.6f, 0.6f, 1, 60);
+            pglEnableClientState(GL_VERTEX_ARRAY);
+            pglEnableClientState(GL_COLOR_ARRAY);
+            pglVertexPointer(3, GL_FLOAT, 32, cube_v);
+            pglColorPointer(4, GL_FLOAT, 32, cube_v + 3);
+            for (int i = 0; i < 10; i++) {
+                float a = wel * 0.12f + i * 0.63f;
+                float rr = 4 + 6 * ((i * 37 % 100) / 100.0f);
+                pglMatrixMode(GL_MODELVIEW);
+                pglLoadIdentity();
+                pglTranslatef(rr * cosf(a), 2.5f * sinf(a * 1.7f + i), -6 - 14 * ((i * 53 % 100) / 100.0f));
+                pglRotatef(wel * 20 + i * 45, 1, 0.7f, 0.3f);
+                pglDrawArrays(GL_TRIANGLES, 0, 36);
+            }
+            pglDisable(GL_DEPTH_TEST);
+            pglDisableClientState(GL_VERTEX_ARRAY);
+            pglDisableClientState(GL_COLOR_ARRAY);
+        } else {
+            /* 2D: drifting soft color quads (dynamic or frozen) */
+            static float quad[6 * 8]; /* xyz rgba stride 8 */
+            pglMatrixMode(GL_PROJECTION);
+            pglLoadIdentity();
+            pglOrthof(0, 800, 480, 0, -1, 1);
+            pglEnableClientState(GL_VERTEX_ARRAY);
+            pglEnableClientState(GL_COLOR_ARRAY);
+            pglEnable(GL_BLEND);
+            pglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            pglVertexPointer(3, GL_FLOAT, 32, quad);
+            pglColorPointer(4, GL_FLOAT, 32, quad + 3);
+            for (int q = 0; q < 7; q++) {
+                float ph = wel * (0.25f + 0.1f * q) + q * 1.7f;
+                float cx = 400 + 330 * sinf(ph * 0.7f + q);
+                float cy = 240 + 190 * cosf(ph * 0.9f + q * 2.3f);
+                float sz = 130 + 60 * sinf(q * 2.1f);
+                float cr = 0.5f + 0.5f * sinf(hue * 6.28f + q);
+                float cg = 0.5f + 0.5f * sinf(hue * 6.28f + q + 2.1f);
+                float cb = 0.5f + 0.5f * sinf(hue * 6.28f + q + 4.2f);
+                float c[6][8] = {
+                    {cx - sz, cy - sz, 0, cr, cg, cb, 0.16f, 0},
+                    {cx + sz, cy - sz, 0, cr, cg, cb, 0.16f, 0},
+                    {cx + sz, cy + sz, 0, cr, cg, cb, 0.16f, 0},
+                    {cx - sz, cy - sz, 0, cr, cg, cb, 0.16f, 0},
+                    {cx + sz, cy + sz, 0, cr, cg, cb, 0.16f, 0},
+                    {cx - sz, cy + sz, 0, cr, cg, cb, 0.16f, 0}};
+                for (int k = 0; k < 48; k++) ((float *)quad)[k] = c[k / 8][k % 8];
+                pglDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+            pglDisable(GL_BLEND);
+            pglDisableClientState(GL_VERTEX_ARRAY);
+            pglDisableClientState(GL_COLOR_ARRAY);
         }
-        pglDisable(GL_DEPTH_TEST);
-        pglDisableClientState(GL_VERTEX_ARRAY);
-        pglDisableClientState(GL_COLOR_ARRAY);
+        }
         /* imgui pass: ortho y-down, identity modelview */
         pglMatrixMode(GL_PROJECTION);
         pglLoadIdentity();

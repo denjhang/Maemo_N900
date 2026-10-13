@@ -207,6 +207,56 @@ void ui_stress_toggle(void) {
     st.FontScaleMain = v; /* forces full glyph rebake = heaviest UI op */
 }
 
+#include <dlfcn.h>
+#include <dirent.h>
+
+/* ============ hot-load: app.so dirs in /home/user/imrun/apps, no restart =====
+   Main binary links with --export-dynamic: plugin .so files reference ImGui
+   symbols directly, resolved from the exe at dlopen time. Rescan ~every 2s. */
+struct DynApp {
+    char id[40], name[40];
+    void *h;
+    void (*frame)(double t);          /* required: draw ImGui content */
+    int (*init)(void);                /* optional */
+    void (*destroy)(void);            /* optional */
+    bool open, mini, ever, cascade;
+    float anim; double anim_t0;
+};
+static DynApp g_dyn[8];
+static int g_dyn_n = 0;
+static int g_dyn_scan_cnt = 0;
+extern "C" int g_wall_mode, g_wall_variant; /* gldemo wallpaper engine */
+
+static void dyn_scan(void) {
+    DIR *d = opendir("/home/user/imrun/apps");
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) && g_dyn_n < 8) {
+        if (e->d_name[0] == '.') continue;
+        bool have = false;
+        for (int k = 0; k < g_dyn_n; k++)
+            if (strcmp(g_dyn[k].id, e->d_name) == 0) { have = true; break; }
+        if (have) continue;
+        char so[128];
+        snprintf(so, sizeof so, "/home/user/imrun/apps/%s/app.so", e->d_name);
+        void *h = dlopen(so, RTLD_NOW);
+        if (!h) continue;
+        void (*frame)(double) = (void (*)(double))dlsym(h, "imapp_frame");
+        if (!frame) { dlclose(h); continue; }
+        DynApp &a = g_dyn[g_dyn_n++];
+        snprintf(a.id, sizeof a.id, "%s", e->d_name);
+        const char *(*nm)(void) = (const char *(*)(void))dlsym(h, "imapp_name");
+        snprintf(a.name, sizeof a.name, "%s", nm ? nm() : e->d_name);
+        a.h = h; a.frame = frame;
+        a.init = (int (*)(void))dlsym(h, "imapp_init");
+        a.destroy = (void (*)(void))dlsym(h, "imapp_destroy");
+        a.open = a.mini = a.ever = a.cascade = false;
+        a.anim = 1; a.anim_t0 = 0;
+        if (a.init) a.init();
+    }
+    closedir(d);
+}
+
 /* ============ IMRUN shell state (declared early: key path uses it) ======= */
 struct ShellApp { const char *name; bool open; bool mini; bool cascade; bool ever;
                   float anim; double anim_t0;   /* open/restore transition */ };
@@ -214,10 +264,12 @@ static ShellApp g_apps[] = {
     {"IMGUI", false, false, false, false, 1, 0}, {"WIDGETS", false, false, false, false, 1, 0},
     {"TONEGEN", false, false, false, false, 1, 0}, {"VIBRA", false, false, false, false, 1, 0},
     {"KEYS", false, false, false, false, 1, 0}, {"FONTS", false, false, false, false, 1, 0},
-    {"SYSINFO", false, false, false, false, 1, 0},
+    {"SYSINFO", false, false, false, false, 1, 0}, {"WALLPAP", false, false, false, false, 1, 0},
 };
 static const int NAPPS = (int)(sizeof g_apps / sizeof g_apps[0]);
 static int g_focus = -1;          /* focused window, -1 = desktop only */
+/* adjustable transparency (WALLPAP app): window bg / taskbar / desktop tint */
+float g_a_win = 0.88f, g_a_bar = 0.80f, g_a_desk = 0.0f;
 bool g_ctrl_down = false;         /* fed by igui_special_key / X keycode 37 */
 static void shell_close(int i);       /* defined below */
 static void shell_minimize(int i);
@@ -371,7 +423,13 @@ static void shell_minimize(int i) {
 }
 void imrun_minimize_by_title(const char *title) {
     if (!title) return;
-    const char *h = strstr(title, "###app");
+    const char *h = strstr(title, "###dyn");
+    if (h) {
+        int i = atoi(h + 6);
+        if (i >= 0 && i < g_dyn_n) g_dyn[i].mini = true;
+        return;
+    }
+    h = strstr(title, "###app");
     if (!h) return;
     int i = atoi(h + 6);
     if (i >= 0 && i < NAPPS) shell_minimize(i);
@@ -464,6 +522,9 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     }
     char title[64];
     snprintf(title, sizeof title, "%s###app%d", a.name, i);
+    /* semi-transparent app windows (alpha adjustable in WALLPAP) */
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImVec4(0.09f, 0.11f, 0.16f, g_a_win));
     /* NATIVE title bar + native docking, untouched. p_open gives the X. */
     bool shown = ImGui::Begin(title, &a.open);
     if (pushed_alpha) ImGui::PopStyleVar();
@@ -483,7 +544,7 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     }
     return true;
 }
-static void shell_end_app(void) { ImGui::End(); }
+static void shell_end_app(void) { ImGui::End(); ImGui::PopStyleColor(); }
 
 /* ---- procedural vector icons (ImDrawList, no textures) ---- */
 /* one 56x56 icon tile centered in rect: accent color + glyph per app */
@@ -599,12 +660,16 @@ void igui_build_ui(double t, float fps) {
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                  ImGuiDockNodeFlags_PassthruCentralNode);
     shell_read_sysfs();
+    if (++g_dyn_scan_cnt >= 120) { g_dyn_scan_cnt = 0; dyn_scan(); }
 
     /* ---- desktop: translucent grid launcher (3D cube background shows
        through - the cubes ARE the wallpaper) ---- */
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2(800, 432));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, vec4f(0.03f, 0.05f, 0.09f, 0.42f));
+    /* transparency spec: desktop fully transparent (wallpaper visible),
+       only the frosted app cards themselves occlude */
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImVec4(0.03f, 0.05f, 0.09f, g_a_desk));
     ImGui::Begin("###desktop", NULL,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
@@ -616,15 +681,25 @@ void igui_build_ui(double t, float fps) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.08f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(1, 1, 1, 0.16f));
         const int cols = 4, cellw = 190, cellh = 118;
-        for (int i = 0; i < NAPPS; i++) {
+        const int total = NAPPS + g_dyn_n;
+        for (int i = 0; i < total; i++) {
+            bool dyn = i >= NAPPS;
+            int di = dyn ? i - NAPPS : -1;
+            const char *nm = dyn ? g_dyn[di].name : g_apps[i].name;
+            bool on = dyn ? (g_dyn[di].open && !g_dyn[di].mini)
+                          : (g_apps[i].open && !g_apps[i].mini);
             int col = i % cols, row = i / cols;
             float bx = 14 + col * cellw, by = 12 + row * cellh;
             ImGui::SetCursorPos(ImVec2(bx, by));
             char hid[16];
             snprintf(hid, sizeof hid, "##desk%d", i);
-            bool on = g_apps[i].open && !g_apps[i].mini;
             if (ImGui::InvisibleButton(hid, ImVec2(cellw - 14, cellh - 12))) {
-                shell_focus(i);
+                if (dyn) {
+                    DynApp &a = g_dyn[di];
+                    if (!a.ever) { a.cascade = true; a.ever = true; }
+                    a.open = true; a.mini = false;
+                    a.anim = 0; a.anim_t0 = now_double();
+                } else shell_focus(i);
             }
             bool hot = ImGui::IsItemHovered();
             /* tile: frosted card behind the icon */
@@ -636,11 +711,10 @@ void igui_build_ui(double t, float fps) {
             dl->AddRect(p0, p1,
                         on ? IM_COL32(90, 200, 240, 220) : IM_COL32(255, 255, 255, 45),
                         10.0f, 0, hot ? 2.5f : 1.5f);
-            shell_draw_icon(i, ImVec2(bx + (cellw - 14) * 0.5f, by + 34), 17.0f,
-                            g_app_accent[i]);
-            char label[32];
-            snprintf(label, sizeof label, "%s%s", g_apps[i].name,
-                     g_apps[i].open ? (g_apps[i].mini ? " -" : " *") : "");
+            shell_draw_icon(dyn ? 7 : i, ImVec2(bx + (cellw - 14) * 0.5f, by + 34), 17.0f,
+                            dyn ? IM_COL32(160, 120, 220, 255) : g_app_accent[i]);
+            char label[40];
+            snprintf(label, sizeof label, "%s%s", nm, on ? " *" : "");
             ImVec2 ts = ImGui::CalcTextSize(label);
             dl->AddText(ImVec2(bx + ((cellw - 14) - ts.x) * 0.5f, by + 76),
                         IM_COL32(235, 240, 245, 235), label);
@@ -657,7 +731,7 @@ void igui_build_ui(double t, float fps) {
     ImGui::SetNextWindowPos(ImVec2(0, 432));
     ImGui::SetNextWindowSize(ImVec2(800, 48));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(3, 3));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, vec4f(0.08f, 0.10f, 0.15f, 0.82f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, vec4f(0.08f, 0.10f, 0.15f, g_a_bar));
     ImGui::Begin("###sysbar", NULL,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
@@ -702,18 +776,27 @@ void igui_build_ui(double t, float fps) {
         g_home_hl *= 0.92f; if (g_home_hl < 0.02f) g_home_hl = 0;
         ImGui::SameLine();
         /* running apps: name chip (click = focus/minimize toggle) */
-        for (int i = 0; i < NAPPS; i++) {
-            if (!g_apps[i].open) continue;
-            bool foc = (g_focus == i && !g_apps[i].mini);
-            bool mini = g_apps[i].mini;
+        for (int i = 0; i < NAPPS + g_dyn_n; i++) {
+            bool dyn = i >= NAPPS;
+            int di = dyn ? i - NAPPS : -1;
+            if (dyn ? !g_dyn[di].open : !g_apps[i].open) continue;
+            const char *nm = dyn ? g_dyn[di].name : g_apps[i].name;
+            bool mini = dyn ? g_dyn[di].mini : g_apps[i].mini;
+            bool foc = (g_focus == i) && !mini;
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
                                       : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
-            char tag[16];
-            snprintf(tag, sizeof tag, "%s##run%d", g_apps[i].name, i);
+            char tag[48];
+            snprintf(tag, sizeof tag, "%s##run%d", nm, i);
             if (ImGui::Button(tag, ImVec2(0, 42))) {
-                if (mini || !foc) shell_focus(i);
-                else shell_minimize(i);
+                if (dyn) {
+                    DynApp &a = g_dyn[di];
+                    if (mini || !foc) { if(!a.ever){a.cascade=true;a.ever=true;} a.open=true; a.mini=false; a.anim=0; a.anim_t0=now_double(); }
+                    else a.mini = true;
+                } else {
+                    if (mini || !foc) shell_focus(i);
+                    else shell_minimize(i);
+                }
             }
             ImGui::PopStyleColor();
             ImGui::SameLine();
@@ -949,6 +1032,60 @@ void igui_build_ui(double t, float fps) {
         }
 
         shell_end_app();
+    }
+    /* APP: WALLPAP - wallpaper engine + transparency controls */
+    if (shell_begin_app(7, ImVec2(360, 160), ImVec2(420, 300))) {
+        const char *modes[4] = {"3D DYNAMIC", "3D STATIC", "2D DYNAMIC", "2D STATIC"};
+        int m = g_wall_mode;
+        if (ImGui::Combo("MODE", &m, modes, 4)) g_wall_mode = m;
+        const char *pals[4] = {"AZURE", "VIOLET", "EMERALD", "AMBER"};
+        int v = g_wall_variant;
+        if (ImGui::Combo("PALETTE", &v, pals, 4)) g_wall_variant = v;
+        ImGui::Separator();
+        ImGui::TextUnformatted("TRANSPARENCY");
+        ImGui::SliderFloat("WINDOW", &g_a_win, 0.4f, 1.0f, "%.2f");
+        ImGui::SliderFloat("TASKBAR", &g_a_bar, 0.3f, 1.0f, "%.2f");
+        ImGui::SliderFloat("DESK TINT", &g_a_desk, 0.0f, 0.8f, "%.2f");
+        ImGui::TextUnformatted("drop app.so into /home/user/imrun/apps/<id>/ - "
+                               "picked up live, no restart");
+        shell_end_app();
+    }
+
+    /* ---- dynamic hot-loaded app windows (app.so from apps dir) ---- */
+    for (int di = 0; di < g_dyn_n; di++) {
+        DynApp &a = g_dyn[di];
+        if (!a.open || a.mini) continue;
+        bool pushed_alpha = false;
+        if (a.cascade) {
+            a.cascade = false;
+            int n = g_cascade_seq++ % 6;
+            ImVec2 cp = ImVec2(24 + n * 42, 20 + n * 34);
+            if (cp.x + 420 > 790) cp.x = 790 - 420;
+            if (cp.y + 300 > 424) cp.y = 424 - 300;
+            ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(420, 300), ImGuiCond_Always);
+        } else if (a.anim < 1.0f) {
+            float tt = (float)(now_double() - a.anim_t0) / 0.22f;
+            if (tt >= 1.0f) a.anim = 1.0f;
+            else {
+                a.anim = tt;
+                float e = tt * tt * (3 - 2 * tt);
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.2f + 0.8f * e);
+                pushed_alpha = true;
+            }
+        }
+        char title[80];
+        snprintf(title, sizeof title, "%s###dyn%d", a.name, di);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.11f, 0.16f, g_a_win));
+        bool shown = ImGui::Begin(title, &a.open);
+        if (pushed_alpha) ImGui::PopStyleVar();
+        if (shown) {
+            a.frame(t);
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = NAPPS + di;
+        }
+        ImGui::End();
+        ImGui::PopStyleColor();
+        if (!a.open) { if (a.destroy) a.destroy(); a.mini = false; }
     }
 }
 
