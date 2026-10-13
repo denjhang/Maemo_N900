@@ -82,6 +82,10 @@ static int (*snd_pcm_hw_params)(snd_pcm_t *, snd_pcm_hw_params_t *);
 static int (*snd_pcm_sw_params_current)(snd_pcm_t *, snd_pcm_sw_params_t *);
 static int (*snd_pcm_sw_params_set_start_threshold)(snd_pcm_t *, snd_pcm_sw_params_t *, unsigned long);
 static int (*snd_pcm_sw_params)(snd_pcm_t *, snd_pcm_sw_params_t *);
+static int (*snd_pcm_state_fn)(snd_pcm_t *);
+static long (*snd_pcm_avail_fn)(snd_pcm_t *);
+static size_t (*snd_pcm_hw_params_sizeof_fn)(void);
+static size_t (*snd_pcm_sw_params_sizeof_fn)(void);
 static snd_pcm_t *pcm;
 int audio_on;
 int audio_amp = 16000;
@@ -93,6 +97,24 @@ static float audio_phase;
 double audio_deadline = 0;
 double dbg_max_stall = 0;
 int dbg_stalls = 0;
+
+/* ---- fine-grained audio trace: /home/user/audio_dbg.log ---- */
+static FILE *alogf;
+static double alog_t0;
+static void alog(const char *fmt, ...) {
+    if (!alogf) {
+        alogf = fopen("/home/user/audio_dbg.log", "a");
+        if (!alogf) return;
+        setvbuf(alogf, NULL, _IONBF, 0); /* survive hangs: flush every line */
+    }
+    unsigned long ms = (unsigned long)((now() - alog_t0) * 1000.0);
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(alogf, "[%6lu.%03lu] ", ms / 1000, ms % 1000);
+    vfprintf(alogf, fmt, ap);
+    fputc('\n', alogf);
+    va_end(ap);
+}
 static void *hPTHREAD;
 static int (*pthread_create_fn)(unsigned long *, void *, void *(*)(void *), void *);
 static int (*pthread_join_fn)(unsigned long, void **);
@@ -272,6 +294,10 @@ static int load_syms(void) {
         snd_pcm_sw_params_current = dlsym(hALSA, "snd_pcm_sw_params_current");
         snd_pcm_sw_params_set_start_threshold = dlsym(hALSA, "snd_pcm_sw_params_set_start_threshold");
         snd_pcm_sw_params = dlsym(hALSA, "snd_pcm_sw_params");
+        snd_pcm_state_fn = dlsym(hALSA, "snd_pcm_state");
+        snd_pcm_avail_fn = dlsym(hALSA, "snd_pcm_avail_update");
+        snd_pcm_hw_params_sizeof_fn = dlsym(hALSA, "snd_pcm_hw_params_sizeof");
+        snd_pcm_sw_params_sizeof_fn = dlsym(hALSA, "snd_pcm_sw_params_sizeof");
         printf("ALSA symbols OK\n");
     } else printf("libasound not found: %s\n", dlerror());
     hPTHREAD = dlopen("libpthread.so.0", RTLD_NOW);
@@ -541,6 +567,40 @@ void audio_toggle(int on) {
     audio_on = on && pcm != NULL;
 }
 
+/* full hw/sw params sequence - AUTOTEST proved prepare alone after drop
+   leaves plug-layer/hw pointers desynced (instant XRUN on next PLAY);
+   AIC34 needs the complete re-setup (same quirk as v7 per-session params) */
+int pcm_resetup(void) {
+    if (!pcm || !snd_pcm_hw_params_any) return -1;
+    /* opaque structs are bigger than they look - fixed 512B stack buffer
+       smashed the guard (device-verified). size via libasound itself */
+    size_t hsz = snd_pcm_hw_params_sizeof_fn ? snd_pcm_hw_params_sizeof_fn() : 512;
+    size_t ssz = snd_pcm_sw_params_sizeof_fn ? snd_pcm_sw_params_sizeof_fn() : 128;
+    snd_pcm_hw_params_t *hwp = __builtin_alloca(hsz);
+    snd_pcm_sw_params_t *swp = __builtin_alloca(ssz);
+    memset(hwp, 0, hsz);
+    memset(swp, 0, ssz);
+    alog("R resetup hsz=%zu ssz=%zu", hsz, ssz);
+    int er = 0;
+    er |= snd_pcm_hw_params_any(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
+    er |= snd_pcm_hw_params_set_access(pcm, (snd_pcm_hw_params_t *)hwp, 3) < 0;
+    er |= snd_pcm_hw_params_set_format(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
+    er |= snd_pcm_hw_params_set_channels(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
+    unsigned rate = 44100; int dir = 0;
+    er |= snd_pcm_hw_params_set_rate_near(pcm, (snd_pcm_hw_params_t *)hwp, &rate, &dir) < 0;
+    unsigned long ps = 1024;
+    er |= snd_pcm_hw_params_set_period_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &ps, &dir) < 0;
+    unsigned long bs = 32768;
+    er |= snd_pcm_hw_params_set_buffer_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &bs) < 0;
+    er |= snd_pcm_hw_params(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
+    if (!er) {
+        snd_pcm_sw_params_current(pcm, (snd_pcm_sw_params_t *)swp);
+        snd_pcm_sw_params_set_start_threshold(pcm, (snd_pcm_sw_params_t *)swp, 1024);
+        snd_pcm_sw_params(pcm, (snd_pcm_sw_params_t *)swp);
+    }
+    return er;
+}
+
 /* SDL-callback-style: dedicated writer thread drains a ring buffer, so UI
    frame hiccups can never underrun the device (PPSSPP/deadbeef pattern) */
 static void *audio_writer(void *arg) {
@@ -548,6 +608,20 @@ static void *audio_writer(void *arg) {
     short chunk[PERIOD * 2];
     /* generator lives IN the writer thread: UI can stall forever,
        audio never notices (deadbeef output-thread pattern) */
+    unsigned long seq = 0;
+    double spawn_t = now();
+    alog("T spawn tid=%lu", (unsigned long)arg);
+    /* silence pad: DMA restart after drop+prepare has a broken-pointer window
+       (AUTOTEST log: first writei = instant XRUN, -EPIPE storm replays stale
+       ring content = the Play-click garbage). Pad 2 periods so the DAC only
+       ever sees silence there. */
+    {
+        static const short zeros[PERIOD * 2];
+        long z1 = snd_pcm_writei(pcm, zeros, PERIOD);
+        long z2 = snd_pcm_writei(pcm, zeros, PERIOD);
+        alog("T silence pad z1=%ld z2=%ld state=%d", z1, z2,
+             snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1);
+    }
     while (thread_run) {
         double t_before = now();
         if (audio_deadline && now() > audio_deadline)
@@ -574,6 +648,8 @@ static void *audio_writer(void *arg) {
             w = snd_pcm_writei(pcm, chunk + done * 2, PERIOD - done);
         }
         if (w < 0 && snd_pcm_prepare) {
+            alog("T ERR seq=%lu w=%ld state=%d -> prepare", seq, w,
+                 snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1);
             snd_pcm_prepare(pcm);
             w = snd_pcm_writei(pcm, chunk, PERIOD);
             if (w < 0) dbg_underruns++;
@@ -582,33 +658,61 @@ static void *audio_writer(void *arg) {
             double stall = now() - t_before; /* one period = ~46ms nominal */
             if (stall > dbg_max_stall) dbg_max_stall = stall;
             if (stall > 0.1) dbg_stalls++;
+            alog("T seq=%lu w=%ld gen+write=%.1fms avail=%ld state=%d",
+                 seq, w, stall * 1000.0,
+                 snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L,
+                 snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1);
+            if (seq == 0)
+                alog("T FIRST-WRITE latency=%.1fms", (t_before - spawn_t) * 1000.0);
+            seq++;
         }
     }
+    alog("T exit seq=%lu", seq);
     return NULL;
 }
 
+void audio_stop_full(void);
 int audio_start(int seconds) {
     if (!pcm || !pthread_create_fn) return 0;
+    alog("S START req=%ds state=%d avail=%ld was_run=%d", seconds,
+         snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1,
+         snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L, thread_run);
     if (thread_run) audio_stop_full();
-    if (snd_pcm_prepare) snd_pcm_prepare(pcm); /* fresh start each time */
+    int pr = snd_pcm_prepare ? snd_pcm_prepare(pcm) : -999; /* fresh start each time */
+    alog("S prepare=%d avail_after=%ld state=%d", pr,
+         snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L,
+         snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1);
     audio_phase = 0;
     audio_deadline = seconds ? now() + seconds : 0;
     thread_run = 1;
     if (pthread_create_fn(&audio_tid, NULL, audio_writer, NULL) != 0) {
         thread_run = 0;
+        alog("S spawn FAIL");
         return 0;
     }
+    alog("S spawned");
     return 1;
 }
 
 void audio_stop_full(void) {
+    double t0 = now();
+    alog("P STOP entry run=%d state=%d avail=%ld", thread_run,
+         snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1,
+         snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L);
     if (thread_run) {
         thread_run = 0;
         if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
-        printf("AUDIO: writer stopped (pcm held)\n");
+        alog("P joined in %.1fms", (now() - t0) * 1000.0);
     }
-    if (pcm && snd_pcm_drop)
+    if (pcm && snd_pcm_drop) {
         snd_pcm_drop(pcm); /* discard residual: instant silence, no stale replay */
+        /* full re-setup, not just prepare: plug-layer/hw pointers desync
+           after drop, plain prepare = instant XRUN on next PLAY (logged) */
+        int er = pcm_resetup();
+        alog("P dropped+resetup(er=%d) after %.1fms state=%d", er,
+             (now() - t0) * 1000.0,
+             snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1);
+    }
     audio_deadline = 0;
     audio_on = 0;
 }
@@ -666,31 +770,39 @@ int main(void) {
        it and never let go. No open/close racing, no EBUSY intermittency. */
     if (snd_pcm_open) {
         if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
-            char hwp[512], swp[128];
-            int er = 0;
-            er |= snd_pcm_hw_params_any(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
-            er |= snd_pcm_hw_params_set_access(pcm, (snd_pcm_hw_params_t *)hwp, 3) < 0;
-            er |= snd_pcm_hw_params_set_format(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
-            er |= snd_pcm_hw_params_set_channels(pcm, (snd_pcm_hw_params_t *)hwp, 2) < 0;
-            unsigned rate = 44100; int dir = 0;
-            er |= snd_pcm_hw_params_set_rate_near(pcm, (snd_pcm_hw_params_t *)hwp, &rate, &dir) < 0;
-            unsigned long ps = 1024;
-            er |= snd_pcm_hw_params_set_period_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &ps, &dir) < 0;
-            unsigned long bs = 32768;
-            er |= snd_pcm_hw_params_set_buffer_size_near(pcm, (snd_pcm_hw_params_t *)hwp, &bs) < 0;
-            er |= snd_pcm_hw_params(pcm, (snd_pcm_hw_params_t *)hwp) < 0;
-            if (!er) {
-                snd_pcm_sw_params_current(pcm, (snd_pcm_sw_params_t *)swp);
-                snd_pcm_sw_params_set_start_threshold(pcm, (snd_pcm_sw_params_t *)swp, 1024);
-                snd_pcm_sw_params(pcm, (snd_pcm_sw_params_t *)swp);
-            }
-            printf("AUDIO: hw held from startup (%s rate=%u)\n", er ? "PARAMS FAIL" : "OK", rate);
+            int er = pcm_resetup();
+            printf("AUDIO: hw held from startup (%s)\n", er ? "PARAMS FAIL" : "OK");
         } else if (snd_pcm_open(&pcm, "default", 0, 0) == 0) {
             snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 1000000);
             printf("AUDIO: via pulse default (hw busy at boot)\n");
         } else {
             printf("AUDIO: no device\n");
         }
+    }
+
+
+    /* AUTOTEST: reproduce rapid Play/Stop garbage, log everything, exit.
+       Runs headless right after PCM grab - no GUI interaction needed. */
+    printf("AUTOTEST env=%s pcm=%p\n", getenv("AUTOTEST") ? getenv("AUTOTEST") : "(null)", (void *)pcm);
+    /* file trigger is the reliable path: env var proved flaky through nohup */
+    if (getenv("AUTOTEST") || access("/home/user/gautotest", 0) == 0) {
+        unlink("/home/user/gautotest");
+    if (pcm) {
+        alog_t0 = now();
+        alog("=== AUTOTEST begin pcm_open=OK amp=%d ===", audio_amp);
+        audio_amp = 2500;
+        for (int cyc = 0; cyc < 6; cyc++) {
+            alog("--- cycle %d: PLAY ---", cyc);
+            audio_start(30);
+            usleep_fn(400000);  /* brief play, like a user tapping */
+            alog("--- cycle %d: STOP ---", cyc);
+            audio_stop_full();
+            usleep_fn(150000);  /* quick re-tap */
+        }
+        alog("=== AUTOTEST end ===");
+        printf("AUTOTEST done, log at /home/user/audio_dbg.log\n");
+        return 0;
+    }
     }
 
 

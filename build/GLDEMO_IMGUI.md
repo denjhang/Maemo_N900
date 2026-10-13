@@ -76,3 +76,11 @@
 - 源码备份: research/releases/gldemo_imgui_src_backup_20261013.tar.gz
 - 本版特性：全屏直通 81FPS 触摸 ImGui + 停靠 + 多语言 + 硬件面板 + 四波形音频发生器（drop-first 停止/静音垫启动/软件音量 0-1000%）
 - **此版本为音频验收基线，后续改动必须与本版 A/B 对比，不准静默回退**
+
+## 发布记录 v9（2026-10-13，Play 点击杂音根因修复）
+- 二进制 md5: 186ff3eb53d93972ab04631b9d9b3491
+- **根因（AUTOTEST 日志实证）**：STOP 的 snd_pcm_drop 之后，plug 插件层与硬件指针失同步——下一次 PLAY 的首次 writei 立即 XRUN（state=4, avail=-32），随后 8~16 个周期 -EPIPE 风暴，期间 DAC 重放 DMA 环内陈旧数据 = 用户听到的 0.5~1s 垃圾声音。prepare 单独救不回来（v8 实测交替复现）
+- **修复**：drop 后重做完整 hw/sw_params 序列（pcm_resetup()，非仅 prepare）+ 写线程启动垫 2 周期静音（填住 DMA 重启窗口）→ AUTOTEST 6/6 循环零 XRUN 零 -EPIPE
+- **附带发现**：v8 提交信息声称的"2 周期静音垫"实际从未进入代码（提交与实现脱节）——本版补上；hwp[512] 固定栈缓冲真实尺寸不够（snd_pcm_hw_params_sizeof()=604）→ 偶发 stack smashing，改 alloca(sizeof)
+- 新调试设施：/home/user/audio_dbg.log 无缓冲音频追踪（每 writei 的返回/avail/state/耗时）；`touch /home/user/gautotest` + 启动 = 快速 Play/Stop 压力自测（env 变量经 nohup 传递不稳定，文件触发可靠）
+- **此版本为音频验收新基线，后续改动必须与本版 A/B 对比，不准静默回退**
