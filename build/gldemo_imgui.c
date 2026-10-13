@@ -59,6 +59,7 @@ static int (*pXPending)(void *);
 static int (*pXNextEvent)(void *, void *);
 static int (*pXFlush)(void *);
 static int (*pXLookupString)(void *, char *, int, void **, void *);
+static unsigned long (*pXLookupKeysym)(void *, int);
 static int (*pXSetInputFocus)(void *, unsigned long, int, unsigned long);
 /* ALSA: sound output without any audio framework */
 typedef struct _snd_pcm snd_pcm_t;
@@ -274,6 +275,7 @@ static int load_syms(void) {
     *(void **)(&pXNextEvent) = dlsym(hX11, "XNextEvent");
     *(void **)(&pXFlush) = dlsym(hX11, "XFlush");
     *(void **)(&pXLookupString) = dlsym(hX11, "XLookupString");
+    *(void **)(&pXLookupKeysym) = dlsym(hX11, "XLookupKeysym");
     *(void **)(&pXSetInputFocus) = dlsym(hX11, "XSetInputFocus");
     hALSA = dlopen("libasound.so.2", RTLD_NOW);
     if (hALSA) {
@@ -477,6 +479,7 @@ extern void igui_render(void);
 extern void igui_mouse_pos(float x, float y);
 extern void igui_mouse_btn(int btn, int down);
 extern void igui_key_char(const char *utf8);
+extern void igui_special_key(unsigned ks, int down);
 extern double audio_deadline;
 extern double dbg_max_stall;
 extern int dbg_stalls;
@@ -912,9 +915,19 @@ int main(void) {
                     if (pXLookupString)
                         pXLookupString(&ev, kb, sizeof kb - 1, NULL, NULL);
                     dbg_key_events++;
-                    snprintf(last_key, sizeof last_key, "KEY %u %s '%s'",
-                             (unsigned)ev.button, ev.type == 2 ? "DOWN" : "UP", kb);
-                    if (ev.type == 2 && kb[0]) igui_key_char(kb);
+                    /* special keys: XLookupString returns empty/control bytes
+                       for Enter/Backspace/arrows/modifiers - resolve the
+                       keysym and feed ImGui's semantic key path (emulator-
+                       verified: Fn/SYM never appear here as plain chars) */
+                    unsigned long ks = pXLookupKeysym ? pXLookupKeysym(&ev, 0) : 0;
+                    if ((ks & 0xff00) == 0xff00)
+                        igui_special_key((unsigned)ks, ev.type == 2);
+                    if (kb[0] >= 0x20 && (unsigned char)kb[0] < 0xf0 &&
+                        !(kb[0] == ' ' && (ks & 0xff00) == 0xff00))
+                        if (ev.type == 2) igui_key_char(kb);
+                    /* KEYS log: keysym hex beats guessing from empty strings */
+                    snprintf(last_key, sizeof last_key, "KEY %u %s '%s' ks=%lx",
+                             (unsigned)ev.button, ev.type == 2 ? "DOWN" : "UP", kb, ks);
                 }
             }
         }

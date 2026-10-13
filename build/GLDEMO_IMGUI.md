@@ -102,3 +102,19 @@
 - 用户实测：播放中连点 PLAY/STOP 一百次，UI 完全不卡，触摸震动全程跟手——**里程碑通过**
 - 发布包: research/releases/gldemo_imgui_release_v10.tar.gz（源码+二进制+构建/部署脚本+文档+imgui 核心）
 - v10 = 音频(v9 基线) + UI 零阻塞 双基线版本
+
+## 特殊键支持（2026-10-13，模拟器源码考古 + 实现 v11）
+
+**考古结论**（证据在 dosbox_0.74-0maemo6 补丁 / hatari keymap.c / PPSSPP NKCodeFromSDL.h）：
+- 所有 Maemo 模拟器都走 SDL 1.2 事件层（底层 X11），无人直读 /dev/input——我们直接吃 XEvent 是同层等价
+- **Fn 键（蓝色斜箭头）不是 XKB modifier，是独立硬件键**：evdev keycode 100 / X keycode 108（dosbox 补丁 `mapper-extra-scancodes`: `sdlkey_map[0x64]=SDLK_BACKQUOTE` + `GetKeyCode` 的 `key-=8` 约定）。Fn+键的组合在 XKB 层已合成进字符——所以只要 XLookupString 正常出字，Fn 层自动可用
+- **SYM 键模拟器全部忽略**（本地全树无任何处理代码），它归 Hildon 输入法管
+- **PPSSPP 的 Maemo 特判**：N900 无 ESC → Backspace 兼任 Escape（NKCodeFromSDL.h:55-60 MaEMO 分支）
+- hatari 用 `SDLK_BACKSPACE-0x0e / RETURN-0x1c / LSHIFT-0x2a / LCTRL-0x1d` 的 PC scancode 偏移启发式（keymap.c:373-405）——同一"Linux/X keycode 减 8 = evdev"约定
+
+**实现（v11）**：
+- 事件泵加 `XLookupKeysym`（dlsym），keysym 高字节 0xff00 的键走新增 `igui_special_key()`：Backspace/Enter/Esc/Tab/四方向/PgUp/PgDn/Home/End/Delete + Shift(L/R)/Ctrl(L/R)/Alt/Mode_switch(0xff7e，Fn 兜底映射 Alt) → ImGui `AddKeyEvent` 语义键
+- 字符路径加可打印过滤（0x20..0xef），控制字节不再误入 UTF-8 文本流
+- KEYS 面板显示 `ks=十六进制 keysym`——以后任何键失灵，屏幕上直接读 keysym，不用再猜
+
+- 二进制 md5: a45c9ab234124ae72409b7b261709bde；AUTOTEST 回归 6/6 干净

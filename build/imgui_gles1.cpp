@@ -178,6 +178,35 @@ void igui_key_char(const char *utf8) {
     ImGui::GetIO().AddInputCharactersUTF8(utf8);
 }
 
+/* special hardware keys (Enter/Backspace/arrows/modifiers). Keysyms are raw
+   X11 values (no X11 headers): 0xff08 BkSp, 0xff0d Return, 0xff1b Esc, ...
+   Emulator evidence: N900 Fn key is standalone keycode evdev100/X108, and
+   XKB composes Fn+key into the charsym - so only modifiers need wiring. */
+void igui_special_key(unsigned ks, int down) {
+    ImGuiIO &io = ImGui::GetIO();
+    ImGuiKey k = ImGuiKey_None;
+    switch (ks) {
+    case 0xff08: k = ImGuiKey_Backspace; break;        /* BackSpace */
+    case 0xff0a: case 0xff0d: k = ImGuiKey_Enter; break; /* Return/Linefeed */
+    case 0xff1b: k = ImGuiKey_Escape; break;
+    case 0xff09: k = ImGuiKey_Tab; break;
+    case 0xff51: k = ImGuiKey_LeftArrow; break;
+    case 0xff52: k = ImGuiKey_UpArrow; break;
+    case 0xff53: k = ImGuiKey_RightArrow; break;
+    case 0xff54: k = ImGuiKey_DownArrow; break;
+    case 0xff55: k = ImGuiKey_PageUp; break;
+    case 0xff56: k = ImGuiKey_PageDown; break;
+    case 0xff57: k = ImGuiKey_End; break;
+    case 0xff58: k = ImGuiKey_Home; break;
+    case 0xff63: case 0xffff: k = ImGuiKey_Delete; break; /* Insert/Del */
+    case 0xffe1: case 0xffe2: k = ImGuiMod_Shift; break;
+    case 0xffe3: case 0xffe4: case 0xffe5: k = ImGuiMod_Ctrl; break;
+    case 0xffe7: case 0xffe8: case 0xffe9: case 0xff7e: k = ImGuiMod_Alt; break;
+    }
+    if (k != ImGuiKey_None)
+        io.AddKeyEvent(k, down != 0);
+}
+
 void igui_mouse_pos(float x, float y) {
     ImGuiIO &io = ImGui::GetIO();
     io.AddMousePosEvent(x, y);
