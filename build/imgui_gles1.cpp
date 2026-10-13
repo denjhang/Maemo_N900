@@ -265,7 +265,11 @@ static ShellApp g_apps[] = {
     {"TONEGEN", false, false, false, false, 1, 0}, {"VIBRA", false, false, false, false, 1, 0},
     {"KEYS", false, false, false, false, 1, 0}, {"FONTS", false, false, false, false, 1, 0},
     {"SYSINFO", false, false, false, false, 1, 0}, {"WALLPAP", false, false, false, false, 1, 0},
+    {"APPMGR", false, false, false, false, 1, 0},
 };
+/* desktop edit mode: long-press an icon -> red X badges (uninstall) */
+static bool g_desk_edit = false;
+static int g_dyn_dead = -1;         /* index pending dlclose+rm at frame start */
 static const int NAPPS = (int)(sizeof g_apps / sizeof g_apps[0]);
 static int g_focus = -1;          /* focused window, -1 = desktop only */
 /* adjustable transparency (WALLPAP app): window bg / taskbar / desktop tint */
@@ -610,6 +614,15 @@ static void shell_draw_icon(int i, ImVec2 c, float s, ImU32 accent) {
         dl->AddLine(ImVec2(c.x, c.y - s * 0.35f), ImVec2(c.x, c.y + s * 0.35f), line, 2.5f);
         break;
     }
+    case 8: { /* APPMGR: 2x2 app grid + plus */
+        for (int r = 0; r < 2; r++)
+            for (int k = 0; k < 2; k++)
+                dl->AddRectFilled(ImVec2(c.x - s * 0.7f + k * s * 0.8f, c.y - s * 0.7f + r * s * 0.8f),
+                                  ImVec2(c.x - s * 0.7f + k * s * 0.8f + s * 0.55f,
+                                         c.y - s * 0.7f + r * s * 0.8f + s * 0.55f),
+                                  (r + k) % 2 ? IM_COL32(70, 160, 140, 255) : IM_COL32(90, 130, 180, 255), 4.0f);
+        break;
+    }
     default: { /* SYSINFO: chip with pins */
         dl->AddRectFilled(ImVec2(c.x - s * 0.55f, c.y - s * 0.55f),
                           ImVec2(c.x + s * 0.55f, c.y + s * 0.55f), accent, 4.0f);
@@ -624,11 +637,12 @@ static void shell_draw_icon(int i, ImVec2 c, float s, ImU32 accent) {
     }
     }
 }
-static ImU32 g_app_accent[7] = {
+static ImU32 g_app_accent[9] = {
     IM_COL32(70, 170, 220, 255), IM_COL32(230, 170, 60, 255),
     IM_COL32(90, 220, 140, 255), IM_COL32(220, 120, 220, 255),
     IM_COL32(200, 200, 210, 255), IM_COL32(240, 130, 110, 255),
-    IM_COL32(120, 190, 240, 255),
+    IM_COL32(120, 190, 240, 255), IM_COL32(170, 140, 230, 255),
+    IM_COL32(120, 220, 190, 255),
 };
 
 /* clock string HH:MM */
@@ -693,14 +707,32 @@ void igui_build_ui(double t, float fps) {
             ImGui::SetCursorPos(ImVec2(bx, by));
             char hid[16];
             snprintf(hid, sizeof hid, "##desk%d", i);
+            static double hold_t0[16] = {0};
             if (ImGui::InvisibleButton(hid, ImVec2(cellw - 14, cellh - 12))) {
-                if (dyn) {
+                if (g_desk_edit) {
+                    /* tap near the red X badge = uninstall NOW, no confirm */
+                    ImVec2 mp = ImGui::GetIO().MousePos;
+                    float cx = bx + cellw - 26, cy = by + 6;
+                    if (dyn && (mp.x - cx) * (mp.x - cx) + (mp.y - cy) * (mp.y - cy) < 16 * 16) {
+                        g_dyn_dead = di;
+                        vibra_ping(120);
+                    }
+                } else if (dyn) {
                     DynApp &a = g_dyn[di];
                     if (!a.ever) { a.cascade = true; a.ever = true; }
                     a.open = true; a.mini = false;
                     a.anim = 0; a.anim_t0 = now_double();
                 } else shell_focus(i);
             }
+            /* long-press 0.5s -> edit (uninstall) mode */
+            int hi = i < 16 ? i : 15;
+            if (!g_desk_edit && ImGui::IsItemActive()) {
+                if (hold_t0[hi] == 0) hold_t0[hi] = t;
+                else if (t - hold_t0[hi] > 0.5) {
+                    g_desk_edit = true;
+                    vibra_ping(60);
+                }
+            } else hold_t0[hi] = 0;
             bool hot = ImGui::IsItemHovered();
             /* tile: frosted card behind the icon */
             ImVec2 p0 = ImVec2(bx, by), p1 = ImVec2(bx + cellw - 14, by + cellh - 12);
@@ -721,9 +753,46 @@ void igui_build_ui(double t, float fps) {
         }
         ImGui::PopStyleColor(3);
     }
-    ImGui::SetCursorPos(ImVec2(10, 404));
-    ImGui::TextColored(vec4f(0.55f, 0.62f, 0.72f, 0.85f), "IMRUN shell v0.1 - imgui %s",
-                       ImGui::GetVersion());
+    if (g_desk_edit) {
+        /* edit mode: red X-in-circle badges on uninstallable (dyn) tiles,
+           lock glyph on builtin; DONE button exits */
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        for (int i = 0; i < NAPPS + g_dyn_n; i++) {
+            bool dyn = i >= NAPPS;
+            if (!dyn) continue;
+            int di = i - NAPPS;
+            int col = i % 4, row = i / 4;
+            float bx = 14 + col * 190, by = 12 + row * 118;
+            float cx = bx + 190 - 26, cy = by + 6;
+            dl->AddCircleFilled(ImVec2(cx, cy), 11, IM_COL32(220, 50, 50, 255));
+            dl->AddLine(ImVec2(cx - 5, cy - 5), ImVec2(cx + 5, cy + 5),
+                        IM_COL32(255, 255, 255, 255), 2.5f);
+            dl->AddLine(ImVec2(cx - 5, cy + 5), ImVec2(cx + 5, cy - 5),
+                        IM_COL32(255, 255, 255, 255), 2.5f);
+        }
+        ImGui::SetCursorPos(ImVec2(700, 398));
+        if (ImGui::Button("DONE", ImVec2(86, 30))) g_desk_edit = false;
+        ImGui::SetCursorPos(ImVec2(10, 404));
+        ImGui::TextColored(vec4f(0.9f, 0.5f, 0.4f, 0.9f), "EDIT MODE: tap red X to uninstall");
+    } else {
+        ImGui::SetCursorPos(ImVec2(10, 404));
+        ImGui::TextColored(vec4f(0.55f, 0.62f, 0.72f, 0.85f), "IMRUN shell v0.1 - imgui %s  (long-press icon to edit)",
+                           ImGui::GetVersion());
+    }
+    /* process pending uninstall at safe point (never mid-frame) */
+    if (g_dyn_dead >= 0) {
+        int di = g_dyn_dead; g_dyn_dead = -1;
+        DynApp &a = g_dyn[di];
+        a.open = false;
+        if (a.destroy) a.destroy();
+        dlclose(a.h);
+        char cmd[128];
+        snprintf(cmd, sizeof cmd, "rm -rf /home/user/imrun/apps/%s", a.id);
+        system(cmd);
+        for (int k = di; k < g_dyn_n - 1; k++) g_dyn[k] = g_dyn[k + 1];
+        g_dyn_n--;
+        if (g_focus >= NAPPS + di) g_focus = -1;
+    }
     ImGui::End();
     ImGui::PopStyleColor();
 
@@ -1048,6 +1117,75 @@ void igui_build_ui(double t, float fps) {
         ImGui::SliderFloat("DESK TINT", &g_a_desk, 0.0f, 0.8f, "%.2f");
         ImGui::TextUnformatted("drop app.so into /home/user/imrun/apps/<id>/ - "
                                "picked up live, no restart");
+        shell_end_app();
+    }
+
+    /* APP: APPMGR - install (filtered list) / manage / stats */
+    if (shell_begin_app(8, ImVec2(60, 40), ImVec2(440, 340))) {
+        static char filter[40] = "";
+        if (ImGui::BeginTabBar("mgr")) {
+        if (ImGui::BeginTabItem("INSTALL")) {
+            ImGui::TextUnformatted("source: /home/user/MyDocs (drop .so or .imapp via USB)");
+            static double scan_t = -99;
+            if (ImGui::Button("RESCAN", ImVec2(-1, 40)) || ImGui::GetTime() - scan_t > 30) {
+                scan_t = ImGui::GetTime();
+            }
+            ImGui::InputTextWithHint("##flt", "filter...", filter, sizeof filter);
+            /* enumerate installables */
+            DIR *d = opendir("/home/user/MyDocs");
+            if (d) {
+                struct dirent *e;
+                while ((e = readdir(d))) {
+                    const char *ext = strrchr(e->d_name, '.');
+                    if (!ext || (strcmp(ext, ".so") && strcmp(ext, ".imapp"))) continue;
+                    if (filter[0] && !strstr(e->d_name, filter)) continue;
+                    char path[160];
+                    snprintf(path, sizeof path, "/home/user/MyDocs/%s", e->d_name);
+                    ImGui::BulletText("%s", e->d_name);
+                    ImGui::SameLine(300);
+                    char bid[80];
+                    snprintf(bid, sizeof bid, "INSTALL##%s", e->d_name);
+                    if (ImGui::Button(bid, ImVec2(110, 32))) {
+                        char cmd[256], idname[40];
+                        snprintf(idname, sizeof idname, "%.*s", (int)(ext - e->d_name), e->d_name);
+                        if (!strcmp(ext, ".imapp"))
+                            snprintf(cmd, sizeof cmd,
+                                     "mkdir -p /home/user/imrun/apps && cd /home/user/imrun/apps && rm -rf %s && tar xzf %s",
+                                     idname, path);
+                        else
+                            snprintf(cmd, sizeof cmd,
+                                     "mkdir -p /home/user/imrun/apps/%s && cp %s /home/user/imrun/apps/%s/app.so",
+                                     idname, path, idname);
+                        system(cmd); /* picked up by the 2s hot scan */
+                    }
+                }
+                closedir(d);
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("MANAGE")) {
+            ImGui::Text("builtin: %d", NAPPS);
+            ImGui::Separator();
+            for (int k = 0; k < g_dyn_n; k++) {
+                DynApp &a = g_dyn[k];
+                ImGui::Text("%s  [%s]", a.name, a.open ? (a.mini ? "background" : "running") : "stopped");
+                ImGui::SameLine(280);
+                char uid[48], kid[48];
+                snprintf(uid, sizeof uid, "UNINSTALL##m%d", k);
+                snprintf(kid, sizeof kid, "KILL##m%d", k);
+                if (a.open && ImGui::Button(kid, ImVec2(60, 30))) a.open = false;
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.55f, 0.15f, 0.15f, 1));
+                if (ImGui::Button(uid, ImVec2(110, 30))) g_dyn_dead = k;
+                ImGui::PopStyleColor();
+            }
+            ImGui::Separator();
+            if (ImGui::Button("RESCAN NOW", ImVec2(-1, 40))) dyn_scan();
+            ImGui::TextUnformatted("long-press a desktop icon for quick uninstall");
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+        }
         shell_end_app();
     }
 

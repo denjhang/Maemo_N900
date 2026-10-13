@@ -212,3 +212,12 @@
 - **WALLPAP 应用**（第 8 个内建）：模式+配色下拉，**三个透明度滑条**——窗口 / 任务栏 / 桌面色调，全部实时生效
 - **透明度规范落地**（默认值）：桌面全透（0，壁纸直出）、应用窗口半透（0.88）、系统栏稍不透（0.80）、桌面卡片毛玻璃（悬停/按下发亮）
 - 崩坑记录：注释里写 apps/*/app.so 会提前终止块注释（*/ 符号）；插件链接 -nostdlib 绕开 binutils BFD 断言
+
+## IMRUN Shell v25（2026-10-14，APP 管理器 + 长按卸载，生态闭环）
+- 二进制 md5: 7f6a9dd85bea83f49d04a27348c5a0eb（/home/user/imrun/imrun）
+- **长按桌面图标 0.5s → 编辑模式**（震动反馈）：可卸载 APP 右上角红圈白叉，**点叉直接卸载零确认**（dlclose + rm -rf，在帧首安全点执行，绝不中途拆除）；DONE 退出编辑模式
+- **APPMGR 应用**（第 9 个内建）：
+  - INSTALL 页：扫 /home/user/MyDocs 的 .so/.imapp（USB/文件管理器扔进去即可），**过滤框**实时筛选，INSTALL 一键装（.imapp = tar 解包，.so = 拷入 apps/<id>/），2s 内热加载上桌面
+  - MANAGE 页：已装动态 APP 列表 + 运行状态（running/background/stopped）+ KILL + UNINSTALL + RESCAN NOW
+- 卸载管线统一走 g_dyn_dead 延迟处理（安全点 dlclose），APPMGR 和桌面长按共用
+- 插件生态三件套齐了：hello 示例（SDK）、热加载（分发）、APPMGR（安装/卸载/管理）
