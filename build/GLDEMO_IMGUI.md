@@ -285,3 +285,7 @@
 - 二进制 md5: 4ac847572ecac556db9351faa9d90a39（/home/user/imrun/imrun）
 - **"只剩立方体飘"根因**：v0.4 重写 shell 时把 GL 提交后端（igui_render 的 DrawElements/字体纹理上传/裁剪循环）一并删掉，只剩 ImGui::Render() 构建列表——绘制数据从未送进 GPU。从 git 历史（6532303）找回完整后端恢复；fonts.so 的字体访问器（imrun_font_cn 等）同样被误删，一并恢复（它此前 dlopen 失败被静默跳过）
 - 教训入档：重写大文件时边界必须按函数对齐，不能按注释标记切——本次 a/b 切点之间夹着与 shell 无关的后端代码
+
+### v0.4.1 发布记录（2026-10-14）
+- 发布包: research/releases/imrun_release_v0.4.1.tar.gz（主程序源码+二进制、patched imgui 全源、9 插件源码、图标资产、全套文档）
+- v0.4.1 = 统一插件架构 + 渲染后端恢复；音频/键盘/生命周期基线全部继承
