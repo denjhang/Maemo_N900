@@ -386,6 +386,7 @@ static void shell_read_sysfs(void) {
 
 /* one app window: Begin with close + touch-sized buttons inside.
    open/restore transition: 220ms ease from the taskbar area + fade-in */
+static ImVec2 CalcTextSizeLocal(ImFont *f, float fs, const char *s);
 static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     ShellApp &a = g_apps[i];
     if (!a.open || a.mini) return false;
@@ -420,21 +421,49 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
     }
     char title[64];
     snprintf(title, sizeof title, "%s###app%d", a.name, i);
-    bool shown = ImGui::Begin(title, &a.open);
+    /* custom window chrome: we own the title strip (name + minimize + X).
+       ImGui's native title bar is off; everything else (resize borders,
+       ini persistence) stays native. */
+    bool shown = ImGui::Begin(title, NULL,
+                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking);
     if (pushed_alpha) ImGui::PopStyleVar();
     if (!shown) { ImGui::End(); shell_close(i); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) g_focus = i;
-    /* minimize button in the TITLE BAR, left of the X (Windows logic) */
+    /* ---- title strip: drag = move window, [_] minimize, [X] close ---- */
     {
-        ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        float w = ImGui::GetContentRegionAvail().x;
         float th = ImGui::GetFrameHeight();
-        ImVec2 keep = ImGui::GetCursorPos();
-        ImGui::SetCursorScreenPos(ImVec2(wp.x + ws.x - th * 2 - 4, wp.y + 2));
-        ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.25f, 0.35f, 0.48f, 0.9f));
-        if (ImGui::Button("_###min", ImVec2(th - 4, th - 4)))
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        bool foc = (g_focus == i);
+        dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + th),
+                          foc ? IM_COL32(24, 62, 92, 255) : IM_COL32(28, 34, 48, 255),
+                          ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersTop);
+        /* drag strip (invisible button spans everything left of the buttons) */
+        float bw = th; /* square buttons */
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.10f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(1, 1, 1, 0.20f));
+        ImGui::InvisibleButton("##tbar", ImVec2(w - bw * 2 - 6, th));
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
+            ImVec2 d = ImGui::GetIO().MouseDelta;
+            ImGui::SetWindowPos(ImVec2(ImGui::GetWindowPos().x + d.x,
+                                       ImGui::GetWindowPos().y + d.y));
+        }
+        ImVec2 ts = CalcTextSizeLocal(ImGui::GetFont(), ImGui::GetFontSize(), a.name);
+        dl->AddText(ImVec2(p0.x + 10, p0.y + (th - ts.y) * 0.5f),
+                    IM_COL32(235, 240, 245, 240), a.name);
+        ImGui::SameLine(0, 6);
+        if (ImGui::Button("_##min", ImVec2(bw, th))) /* Windows order: _ then X */
             shell_minimize(i);
+        ImGui::SameLine(0, 2);
+        ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.55f, 0.15f, 0.15f, 1));
+        if (ImGui::Button("x##cls", ImVec2(bw, th)))
+            shell_close(i);
         ImGui::PopStyleColor();
-        ImGui::SetCursorPos(keep);
+        ImGui::PopStyleColor(3);
+        /* content starts below the strip */
+        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + th + ImGui::GetStyle().ItemSpacing.y));
     }
     return true;
 }
@@ -656,7 +685,7 @@ void igui_build_ui(double t, float fps) {
         g_back_hl *= 0.92f; if (g_back_hl < 0.02f) g_back_hl = 0;
         g_home_hl *= 0.92f; if (g_home_hl < 0.02f) g_home_hl = 0;
         ImGui::SameLine();
-        /* running apps: name chip + red X */
+        /* running apps: name chip (click = focus/minimize toggle) */
         for (int i = 0; i < NAPPS; i++) {
             if (!g_apps[i].open) continue;
             bool foc = (g_focus == i && !g_apps[i].mini);
@@ -665,22 +694,12 @@ void igui_build_ui(double t, float fps) {
                                   foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
                                       : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
             char tag[16];
-            snprintf(tag, sizeof tag, "%.4s##run%d", g_apps[i].name, i);
-            if (ImGui::Button(tag, ImVec2(56, 42))) {
+            snprintf(tag, sizeof tag, "%s##run%d", g_apps[i].name, i);
+            if (ImGui::Button(tag, ImVec2(0, 42))) {
                 if (mini || !foc) shell_focus(i);
                 else shell_minimize(i);
             }
             ImGui::PopStyleColor();
-            ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Button, vec4f(0.62f, 0.14f, 0.14f, 1));
-            ImGui::PushStyleColor(ImGuiCol_Text, vec4f(1, 1, 1, 1));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
-            char xt[12];
-            snprintf(xt, sizeof xt, "x##kill%d", i);
-            if (ImGui::Button(xt, ImVec2(18, 42)))
-                shell_close(i);
-            ImGui::PopStyleVar();
-            ImGui::PopStyleColor(2);
             ImGui::SameLine();
         }
         /* right side: [thermo C] [battery %] [clock] - measured, evenly
