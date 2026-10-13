@@ -401,23 +401,16 @@ static bool shell_begin_app(int i, ImVec2 pos, ImVec2 size) {
         ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
         ImGui::SetNextWindowSize(cs, ImGuiCond_Always);
     } else if (a.anim < 1.0f) {
+        /* reopen/restore: ALPHA FADE ONLY. Never force pos/size here -
+           SetNextWindowPos during the animation stomps the layout the user
+           saved in imrun.ini (that was the bottom-left-reappear bug) */
         float t = (float)(now_double() - a.anim_t0) / 0.22f;
         if (t >= 1.0f) {
             a.anim = 1.0f;
         } else {
             a.anim = t;
             float e = t * t * (3 - 2 * t); /* smoothstep */
-            /* origin: rough taskbar slot x, above the bottom bar */
-            int slot = 0;
-            for (int k = 0; k < i; k++) if (g_apps[k].open) slot++;
-            ImVec2 from = ImVec2(108 + slot * 74, 350);
-            ImGui::SetNextWindowPos(ImVec2(from.x + (pos.x - from.x) * e,
-                                           from.y + (pos.y - from.y) * e),
-                                    ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(200 + (size.x - 200) * e,
-                                            100 + (size.y - 100) * e),
-                                     ImGuiCond_Always);
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.25f + 0.75f * e);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.2f + 0.8f * e);
             pushed_alpha = true;
         }
     }
@@ -690,8 +683,8 @@ void igui_build_ui(double t, float fps) {
             ImGui::PopStyleColor(2);
             ImGui::SameLine();
         }
-        /* right side: [thermo C] [battery %] [clock] - icon + centered text.
-           ImDrawList uses SCREEN coords: add this window's (0,432) offset! */
+        /* right side: [thermo C] [battery %] [clock] - measured, evenly
+           spaced groups, right-aligned (runtime text metrics, no guessing) */
         float wy = ImGui::GetWindowPos().y;   /* = 432 */
         float ytxt = wy + 21 - ImGui::GetFontSize() * 0.5f;
         char bat[8] = "--", tmp[8] = "--", clk[8] = "--:--";
@@ -700,45 +693,45 @@ void igui_build_ui(double t, float fps) {
         snprintf(clk, sizeof clk, "%s", shell_clock());
         ImFont *f = ImGui::GetFont();
         float fs = ImGui::GetFontSize();
-        /* temperature: thermometer icon + value + C */
-        {
-            float x = 566;
-            float yc = wy + 21;
-            dl->AddCircleFilled(ImVec2(x, yc + 9), 4.0f, IM_COL32(235, 90, 80, 255));
-            dl->AddLine(ImVec2(x, yc + 9), ImVec2(x, yc - 8), IM_COL32(235, 90, 80, 255), 4.0f);
-            ImVec2 ts = CalcTextSizeLocal(f, fs, tmp);
-            dl->AddText(ImVec2(x + 9, ytxt), line, tmp);
-            dl->AddText(ImVec2(x + 9 + ts.x + 2, ytxt),
-                        IM_COL32(180, 190, 200, 230), "C");
-        }
-        /* battery: outline + fill by pct + nub + value% */
-        {
-            float x = 648;
-            float yc = wy + 21;
-            dl->AddRect(ImVec2(x, yc - 7), ImVec2(x + 30, yc + 9), line, 3.0f, 0, 2.0f);
-            dl->AddRectFilled(ImVec2(x + 30, yc - 3), ImVec2(x + 34, yc + 5), line, 1.0f);
-            int pct = g_batt_pct < 0 ? 0 : g_batt_pct;
-            ImU32 col = pct > 40 ? IM_COL32(110, 220, 130, 255)
-                      : pct > 15 ? IM_COL32(235, 190, 80, 255)
-                                 : IM_COL32(235, 90, 80, 255);
-            if (g_batt_pct >= 0)
-                dl->AddRectFilled(ImVec2(x + 3, yc - 4),
-                                  ImVec2(x + 3 + 24 * pct / 100, yc + 6), col, 2.0f);
-            char btxt[12];
-            snprintf(btxt, sizeof btxt, "%s%%", bat);
-            ImVec2 ts = CalcTextSizeLocal(f, fs, btxt);
-            dl->AddText(ImVec2(x + 40, ytxt), line, btxt);
-        }
-        /* clock: watch icon + HH:MM (flush right, 8px margin) */
-        {
-            ImVec2 ts = CalcTextSizeLocal(f, fs, clk);
-            float x = 792 - ts.x - 16;
-            float yc = wy + 21;
-            dl->AddCircle(ImVec2(x, yc), 9.0f, line, 32, 2.0f);
-            dl->AddLine(ImVec2(x, yc), ImVec2(x, yc - 6), line, 2.0f);
-            dl->AddLine(ImVec2(x, yc), ImVec2(x + 4.5f, yc + 2), line, 2.0f);
-            dl->AddText(ImVec2(x + 14, ytxt), line, clk);
-        }
+        ImVec2 tc = CalcTextSizeLocal(f, fs, clk);
+        ImVec2 tb = CalcTextSizeLocal(f, fs, bat);
+        strcat(bat, "%"); tb = CalcTextSizeLocal(f, fs, bat);
+        ImVec2 tt = CalcTextSizeLocal(f, fs, tmp);
+        ImVec2 tC = CalcTextSizeLocal(f, fs, "C");
+        const float GAP = 20.0f, ICON_TXT = 4.0f;
+        /* clock: [watch] text        (right edge 792) */
+        float clk_tx = 792 - tc.x;
+        float clk_ix = clk_tx - ICON_TXT - 18;
+        /* battery: [gauge] text      (gap 20 from clock icon) */
+        float bat_tx = clk_ix - GAP - tb.x;
+        float bat_ix = bat_tx - ICON_TXT - 34;
+        /* temp: [thermo] num C       (gap 20 from battery icon) */
+        float tmp_Cx = bat_ix - GAP - tC.x;
+        float tmp_nx = tmp_Cx - 2 - tt.x;
+        float tmp_ix = tmp_nx - ICON_TXT - 8;
+        float yc = wy + 21;
+        /* temperature */
+        dl->AddCircleFilled(ImVec2(tmp_ix + 4, yc + 9), 4.0f, IM_COL32(235, 90, 80, 255));
+        dl->AddLine(ImVec2(tmp_ix + 4, yc + 9), ImVec2(tmp_ix + 4, yc - 8),
+                    IM_COL32(235, 90, 80, 255), 4.0f);
+        dl->AddText(ImVec2(tmp_nx, ytxt), line, tmp);
+        dl->AddText(ImVec2(tmp_Cx, ytxt), IM_COL32(180, 190, 200, 230), "C");
+        /* battery gauge */
+        dl->AddRect(ImVec2(bat_ix, yc - 7), ImVec2(bat_ix + 30, yc + 9), line, 3.0f, 0, 2.0f);
+        dl->AddRectFilled(ImVec2(bat_ix + 30, yc - 3), ImVec2(bat_ix + 34, yc + 5), line, 1.0f);
+        int pct = g_batt_pct < 0 ? 0 : g_batt_pct;
+        ImU32 col = pct > 40 ? IM_COL32(110, 220, 130, 255)
+                  : pct > 15 ? IM_COL32(235, 190, 80, 255)
+                             : IM_COL32(235, 90, 80, 255);
+        if (g_batt_pct >= 0)
+            dl->AddRectFilled(ImVec2(bat_ix + 3, yc - 4),
+                              ImVec2(bat_ix + 3 + 24 * pct / 100, yc + 6), col, 2.0f);
+        dl->AddText(ImVec2(bat_tx, ytxt), line, bat);
+        /* clock */
+        dl->AddCircle(ImVec2(clk_ix + 9, yc), 9.0f, line, 32, 2.0f);
+        dl->AddLine(ImVec2(clk_ix + 9, yc), ImVec2(clk_ix + 9, yc - 6), line, 2.0f);
+        dl->AddLine(ImVec2(clk_ix + 9, yc), ImVec2(clk_ix + 13.5f, yc + 2), line, 2.0f);
+        dl->AddText(ImVec2(clk_tx, ytxt), line, clk);
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
     }
