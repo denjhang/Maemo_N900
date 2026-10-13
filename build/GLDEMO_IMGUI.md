@@ -192,3 +192,9 @@
   - imgui.cpp 标题栏渲染处、Close 按钮左侧插入 MinimizeButton；导出 C 符号 `ImGui_g_MinimizeCallback(title)`，shell 注册回调按 `###appN` 解析目标窗口
   - **原生标题栏级别，停靠/浮动都渲染**（dock 节点吞按钮的问题从核心侧解决——标题栏绘制路径就带这个按钮）
 - **窗口生命周期**：TONEGEN 关窗 = 音频停（shell_close(2) 调 imrun_audio_stop_all，走异步控制线程不阻塞 UI）；最小化不停播（后台继续响，合理默认）
+
+## IMRUN Shell v22（2026-10-14，窗口生命周期：关闭=销毁）
+- 二进制 md5: 4387bda2d14d62b72feb649ab97e94d9（/home/user/imrun）
+- **shell_close 现在走 shell_app_destroy**：关闭 = 实例销毁——TONEGEN 停音频+波形/音量回默认值，VIBRA 停震动；重开 = 全新实例（静态 UI 状态由 ImGui ini 布局之外的窗口内容自动重建）
+- 原则入档：**关掉的 APP 不占任何活资源**（256MB 机器的生存纪律）；将来 .imapp dlopen 版在同一钩子挂 destroy()+dlclose，语义不变
+- 显示型 APP（WIDGETS/KEYS/FONTS/SYSINFO/IMGUI）无资源，关闭即销毁纯 UI 状态

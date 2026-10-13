@@ -224,6 +224,10 @@ static void shell_minimize(int i);
 /* patched-ImGui native minimize hook: window title "NAME###appN" -> N */
 void imrun_minimize_by_title(const char *title);
 extern "C" void imrun_audio_stop_all(void); /* gldemo side: TONEGEN cleanup */
+extern "C" int audio_wave;   /* gldemo side */
+extern "C" int audio_volume;
+int audio_ui_alive = 0;      /* cleared on close; TONEGEN reads for display */
+static void audio_wave_reset(void) { audio_wave = 0; audio_volume = 100; }
 void igui_ctrl_combo(char c);         /* from X11 pump: ctrl+letter combos */
 
 void igui_key_char(const char *utf8) {
@@ -350,11 +354,16 @@ static float hue = 0.4f;
 
 /* ============ IMRUN shell: desktop + bottom system bar + apps ============
    resistive screen = mouse logic: pure clicks, >=48px targets, no gestures */
+/* app lifecycle: close = destroy. All static/app state resets to
+   first-launch so reopening is a fresh instance - nothing survives a close.
+   (Today the apps are in-process; when .imapp dlopen lands, this is where
+   destroy()+dlclose goes. Same rule, bigger hammer.) */
+static void shell_app_destroy(int i);
 static void shell_close(int i) {
     g_apps[i].open = false;
     g_apps[i].mini = false;
     if (g_focus == i) g_focus = -1;
-    if (i == 2) imrun_audio_stop_all(); /* TONEGEN: audio dies with its window */
+    shell_app_destroy(i);
 }
 static void shell_minimize(int i) {
     g_apps[i].mini = true;
@@ -366,6 +375,21 @@ void imrun_minimize_by_title(const char *title) {
     if (!h) return;
     int i = atoi(h + 6);
     if (i >= 0 && i < NAPPS) shell_minimize(i);
+}
+/* reset an app's static state = "freed". Add per-app reset blocks here;
+   anything NOT reset here would survive close - keep this exhaustive. */
+#include <string.h>
+static void shell_app_destroy(int i) {
+    switch (i) {
+    case 2: /* TONEGEN: stop tone generator, wave/vol back to defaults */
+        imrun_audio_stop_all();
+        audio_wave_reset();
+        break;
+    case 3: /* VIBRA: stop any running pattern */
+        vibra_stop();
+        break;
+    default: break; /* display-only apps hold no resources */
+    }
 }
 static void shell_minimize_all(void) {
     for (int i = 0; i < NAPPS; i++) g_apps[i].mini = true;
@@ -846,6 +870,7 @@ void igui_build_ui(double t, float fps) {
         {
             extern int audio_volume;
             extern int audio_wave;
+            audio_ui_alive = 1; /* TONEGEN instance is live */
             const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
             ImGui::Combo("WAVE", &audio_wave, waves, 4);
             ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
