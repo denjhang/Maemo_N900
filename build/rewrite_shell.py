@@ -1,0 +1,579 @@
+import io
+p='imgui_gles1.cpp'
+s=open(p,encoding='utf-8').read()
+a=s.index('/* ============ hot-load: app.so dirs')
+b=s.index('} // extern "C"')
+head=s[:a]
+new_shell = r'''#include <dlfcn.h>
+#include <dirent.h>
+#include <string.h>
+
+/* ============ IMRUN shell v0.4: EVERYTHING is a dyn plugin ==============
+   System apps (SYSTEM/APPMGR) are plugins too - just marked protected
+   (imapp_system() returns 1) so APPMGR/edit-mode refuse to uninstall them.
+   One window code path for all apps: no special branches, no special bugs. */
+
+#define IMRUN_VER "0.4"
+#define APPS_DIR "/home/user/imrun/apps"
+#define SYSBAR_H 48.0f
+
+struct DynApp {
+    char id[40], name[40];
+    void *h;
+    void (*frame)(double t);
+    int (*init)(void);
+    void (*destroy)(void);
+    void (*icon)(void *dl, float cx, float cy, float s);
+    int (*sys)(void);
+    bool open, mini, ever, cascade, closing;
+    float anim; double anim_t0, close_t0;
+};
+static DynApp g_dyn[8];
+static int g_dyn_n = 0;
+static int g_dyn_scan_cnt = 0;
+static int g_dyn_dead = -1;
+extern "C" int g_wall_mode = 0, g_wall_variant = 0;
+extern "C" float g_a_win = 0.88f, g_a_bar = 0.80f, g_a_desk = 0.0f;
+extern "C" bool g_dock_covers_sysbar = false;
+
+/* ---- host services exported to plugins ---- */
+extern "C" double imrun_now(void);
+extern "C" void imrun_vibra_ping(int ms) { extern void vibra_ping(int); vibra_ping(ms); }
+extern "C" void imrun_vibra_stop(void) { extern void vibra_stop(void); vibra_stop(); }
+extern "C" int imrun_dyn_count(void) { return g_dyn_n; }
+extern "C" const char *imrun_dyn_name(int i) { return (i>=0&&i<g_dyn_n)?g_dyn[i].name:""; }
+extern "C" int imrun_dyn_state(int i) {
+    if (i<0||i>=g_dyn_n) return 0;
+    return g_dyn[i].open ? (g_dyn[i].mini?1:2) : 0;
+}
+extern "C" void imrun_dyn_kill(int i) { if (i>=0&&i<g_dyn_n&&g_dyn[i].open&&!g_dyn[i].closing){g_dyn[i].closing=true;g_dyn[i].close_t0=now_double();} }
+extern "C" void imrun_dyn_uninstall(int i) { if (i>=0&&i<g_dyn_n&&!g_dyn[i].sys) g_dyn_dead = i; }
+extern "C" void imrun_host_rescan(void) { g_dyn_scan_cnt = 1000; }
+
+static char g_desk_filter[32] = "";
+static bool g_desk_edit = false;
+static int g_desk_nav_sel = -1;
+bool g_ctrl_down = false;
+static bool g_win_move = false;
+static float g_nudge_dx = 0, g_nudge_dy = 0;
+static float g_back_hl = 0, g_home_hl = 0;
+
+static int g_focus = -1;
+static void dyn_focus(int di) {
+    if (di < 0 || di >= g_dyn_n) return;
+    DynApp &a = g_dyn[di];
+    if (!a.ever) { a.cascade = true; a.ever = true; }
+    a.open = true; a.mini = false;
+    a.anim = 0; a.anim_t0 = now_double();
+    g_focus = di;
+}
+static void dyn_minimize(int di) { if (di>=0&&di<g_dyn_n) { g_dyn[di].mini = true; if (g_focus==di) g_focus=-1; } }
+static void dyn_minimize_all(void) {
+    for (int k = 0; k < g_dyn_n; k++) g_dyn[k].mini = true;
+    g_focus = -1;
+}
+static void dyn_close(int di) {
+    if (di<0||di>=g_dyn_n) return;
+    if (g_dyn[di].open && !g_dyn[di].closing) {
+        g_dyn[di].closing = true; g_dyn[di].close_t0 = now_double();
+    }
+    if (g_focus == di) g_focus = -1;
+}
+void igui_close_focused(void) { if (g_focus >= 0) dyn_close(g_focus); }
+
+void igui_ctrl_combo(char c) {
+    printf("CTRL+%c (focus=%d)\n", c, g_focus); fflush(stdout);
+    if (c=='w'||c=='W') igui_close_focused();
+    else if (c=='t'||c=='T') {
+        int order[9], n = 0;
+        for (int k = 0; k < g_dyn_n; k++)
+            if (g_dyn[k].open && !g_dyn[k].mini && !g_dyn[k].closing) order[n++] = k;
+        if (!n) return;
+        int cur = -1;
+        for (int k = 0; k < n; k++) if (order[k] == g_focus) cur = k;
+        dyn_focus(order[(cur + 1) % n]);
+    }
+    else if (c=='m'||c=='M') {
+        g_win_move = !g_win_move; g_nudge_dx = g_nudge_dy = 0;
+        imrun_vibra_ping(50);
+    }
+}
+void igui_key_char(const char *utf8) {
+    if (g_focus < 0 && utf8 && utf8[0] >= 0x20 && !utf8[1] &&
+        strlen(g_desk_filter) + 1 < sizeof g_desk_filter) {
+        char c = utf8[0];
+        if ((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')) {
+            size_t l = strlen(g_desk_filter);
+            g_desk_filter[l] = c; g_desk_filter[l+1] = 0;
+            return;
+        }
+    }
+    ImGui::GetIO().AddInputCharactersUTF8(utf8);
+}
+static void dyn_open_by_filter_match(void) {
+    char uf[32];
+    snprintf(uf, sizeof uf, "%s", g_desk_filter);
+    for (char *q = uf; *q; q++) *q = (*q>='a'&&*q<='z') ? *q-32 : *q;
+    for (int i = 0; i < g_dyn_n; i++) {
+        char ub[40];
+        snprintf(ub, sizeof ub, "%s", g_dyn[i].name);
+        for (char *q = ub; *q; q++) *q = (*q>='a'&&*q<='z') ? *q-32 : *q;
+        if (strstr(ub, uf)) { dyn_focus(i); g_desk_filter[0] = 0; return; }
+    }
+    g_desk_filter[0] = 0;
+}
+extern int ImGui_OpenPopupCount(void);
+extern void ImGui_CloseTopPopup(void);
+void igui_special_key(unsigned ks, int down) {
+    ImGuiIO &io = ImGui::GetIO();
+    if (down && g_focus < 0 && g_desk_filter[0]) {
+        if (ks == 0xff08) { size_t l = strlen(g_desk_filter); if (l) g_desk_filter[l-1] = 0; return; }
+        if (ks == 0xff0d || ks == 0xff0a) { dyn_open_by_filter_match(); return; }
+        if (ks == 0xff1b) { g_desk_filter[0] = 0; return; }
+    }
+    if (down && g_focus < 0 && !g_desk_edit) {
+        int total = g_dyn_n;
+        if (total > 0) {
+            if (g_desk_nav_sel < 0) g_desk_nav_sel = 0;
+            if (ks == 0xff51 && g_desk_nav_sel % 4 > 0) g_desk_nav_sel--;
+            else if (ks == 0xff53 && g_desk_nav_sel % 4 < 3 && g_desk_nav_sel + 1 < total) g_desk_nav_sel++;
+            else if (ks == 0xff52 && g_desk_nav_sel >= 4) g_desk_nav_sel -= 4;
+            else if (ks == 0xff54 && g_desk_nav_sel + 4 < total) g_desk_nav_sel += 4;
+            else if (ks == 0xff0d || ks == 0xff0a) { dyn_focus(g_desk_nav_sel); g_desk_nav_sel = -1; return; }
+        }
+        if (ks == 0xff51 || ks == 0xff52 || ks == 0xff53 || ks == 0xff54) return;
+    }
+    if (down && g_win_move && g_focus >= 0) {
+        if (ks == 0xff51) { g_nudge_dx -= 24; return; }
+        if (ks == 0xff53) { g_nudge_dx += 24; return; }
+        if (ks == 0xff52) { g_nudge_dy -= 24; return; }
+        if (ks == 0xff54) { g_nudge_dy += 24; return; }
+    }
+    switch (ks) {
+    case 0xff08: io.AddKeyEvent(ImGuiKey_Backspace, down != 0); break;
+    case 0xff0a: case 0xff0d: io.AddKeyEvent(ImGuiKey_Enter, down != 0); break;
+    case 0xff1b: io.AddKeyEvent(ImGuiKey_Escape, down != 0); break;
+    case 0xff09: io.AddKeyEvent(ImGuiKey_Tab, down != 0); break;
+    case 0xff51: io.AddKeyEvent(ImGuiKey_LeftArrow, down != 0); break;
+    case 0xff52: io.AddKeyEvent(ImGuiKey_UpArrow, down != 0); break;
+    case 0xff53: io.AddKeyEvent(ImGuiKey_RightArrow, down != 0); break;
+    case 0xff54: io.AddKeyEvent(ImGuiKey_DownArrow, down != 0); break;
+    case 0xff55: io.AddKeyEvent(ImGuiKey_PageUp, down != 0); break;
+    case 0xff56: io.AddKeyEvent(ImGuiKey_PageDown, down != 0); break;
+    case 0xff57: io.AddKeyEvent(ImGuiKey_End, down != 0); break;
+    case 0xff58: io.AddKeyEvent(ImGuiKey_Home, down != 0); break;
+    case 0xff63: case 0xffff: io.AddKeyEvent(ImGuiKey_Delete, down != 0); break;
+    case 0xffe1: case 0xffe2: io.AddKeyEvent(ImGuiMod_Shift, down != 0); break;
+    case 0xffe3: case 0xffe4: case 0xffe5: g_ctrl_down = (down != 0); io.AddKeyEvent(ImGuiMod_Ctrl, down != 0); break;
+    case 0xffe7: case 0xffe8: case 0xffe9: case 0xff7e: io.AddKeyEvent(ImGuiMod_Alt, down != 0); break;
+    }
+}
+
+static void dyn_scan(void) {
+    DIR *d = opendir(APPS_DIR);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) && g_dyn_n < 8) {
+        if (e->d_name[0] == '.') continue;
+        bool have = false;
+        for (int k = 0; k < g_dyn_n; k++)
+            if (strcmp(g_dyn[k].id, e->d_name) == 0) { have = true; break; }
+        if (have) continue;
+        char so[128];
+        snprintf(so, sizeof so, APPS_DIR "/%s/app.so", e->d_name);
+        void *h = dlopen(so, RTLD_NOW);
+        if (!h) continue;
+        void (*frame)(double) = (void (*)(double))dlsym(h, "imapp_frame");
+        if (!frame) { dlclose(h); continue; }
+        DynApp &a = g_dyn[g_dyn_n++];
+        snprintf(a.id, sizeof a.id, "%s", e->d_name);
+        const char *(*nm)(void) = (const char *(*)(void))dlsym(h, "imapp_name");
+        snprintf(a.name, sizeof a.name, "%s", nm ? nm() : e->d_name);
+        a.h = h; a.frame = frame;
+        a.init = (int (*)(void))dlsym(h, "imapp_init");
+        a.destroy = (void (*)(void))dlsym(h, "imapp_destroy");
+        a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
+        a.sys = (int (*)(void))dlsym(h, "imapp_system");
+        a.open = a.mini = a.ever = a.cascade = a.closing = false;
+        a.anim = 1; a.anim_t0 = a.close_t0 = 0;
+        if (a.init) a.init();
+    }
+    closedir(d);
+}
+
+static void shell_draw_icon(int i, ImVec2 c, float s, ImU32 accent) {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    if (i < 0) {
+        ImVec2 t = c, r = ImVec2(c.x + s, c.y + s * 0.30f), b2 = ImVec2(c.x, c.y + s * 0.60f);
+        ImVec2 l = ImVec2(c.x - s, c.y + s * 0.30f), bb = ImVec2(c.x, c.y + s * 1.05f);
+        dl->AddTriangleFilled(l, b2, bb, IM_COL32(30, 80, 115, 255));
+        dl->AddTriangleFilled(b2, r, bb, IM_COL32(45, 115, 165, 255));
+        dl->AddTriangleFilled(t, r, b2, accent);
+        dl->AddTriangleFilled(t, b2, l, IM_COL32(70, 150, 200, 255));
+    } else {
+        dl->AddRectFilled(ImVec2(c.x - s * 0.7f, c.y - s * 0.7f),
+                          ImVec2(c.x + s * 0.7f, c.y + s * 0.7f), accent, 8.0f);
+    }
+}
+static ImU32 g_app_accent[8] = {
+    IM_COL32(120, 190, 240, 255), IM_COL32(120, 220, 190, 255),
+    IM_COL32(160, 120, 220, 255), IM_COL32(230, 170, 60, 255),
+    IM_COL32(90, 220, 140, 255), IM_COL32(220, 120, 220, 255),
+    IM_COL32(200, 200, 210, 255), IM_COL32(240, 130, 110, 255),
+};
+
+static const char *shell_clock(void) {
+    static char buf[8];
+    time_t tt = time(NULL);
+    struct tm *lt = localtime(&tt);
+    if (lt) snprintf(buf, sizeof buf, "%02d:%02d", lt->tm_hour, lt->tm_min);
+    else snprintf(buf, sizeof buf, "--:--");
+    return buf;
+}
+static ImVec2 CalcTextSizeLocal(ImFont *f, float fs, const char *s) {
+    return f->CalcTextSizeA(fs, 1000000.0f, 0.0f, s);
+}
+extern "C" int g_batt_pct;
+static int g_temp = -1;
+static void shell_read_sysfs(void) {
+    static int cnt = 0;
+    if (++cnt % 90) return;
+    char line[64];
+    FILE *f = fopen("/sys/class/hwmon/hwmon0/device/temp1_input", "r");
+    if (f) { if (fgets(line, sizeof line, f)) g_temp = atoi(line); fclose(f); }
+}
+
+static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
+    DynApp &a = g_dyn[di];
+    if ((!a.open && !a.closing) || a.mini) return false;
+    bool pushed_alpha = false;
+    if (a.cascade) {
+        a.cascade = false;
+        int n = g_dyn_scan_cnt % 6;
+        ImVec2 cp = ImVec2(24 + n * 42, 20 + n * 34);
+        ImVec2 cs = ImVec2(size.x < 420 ? 420 : size.x, size.y < 300 ? 300 : size.y);
+        if (cp.x + cs.x > 790) cp.x = 790 - cs.x;
+        if (cp.y + cs.y > 424) cp.y = 424 - cs.y;
+        ImGui::SetNextWindowPos(cp, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(cs, ImGuiCond_Always);
+    }
+    if (a.closing) {
+        float t = (float)(now_double() - a.close_t0) / 0.5f;
+        if (t >= 1.0f) {
+            a.open = false; a.closing = false; a.mini = false;
+            if (a.destroy) a.destroy();
+            return false;
+        }
+        float e = t * t * (3 - 2 * t);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f - e);
+        pushed_alpha = true;
+    } else if (a.anim < 1.0f) {
+        float t = (float)(now_double() - a.anim_t0) / 0.5f;
+        if (t >= 1.0f) a.anim = 1.0f;
+        else {
+            a.anim = t;
+            float e = t * t * (3 - 2 * t);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, e);
+            pushed_alpha = true;
+        }
+    }
+    if (g_win_move && g_focus == di && (g_nudge_dx || g_nudge_dy)) {
+        extern bool ImGui_GetWindowPosByName(const char *, float *, float *);
+        float wx = 0, wy = 0;
+        char tn[80];
+        snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
+        if (ImGui_GetWindowPosByName(tn, &wx, &wy)) {
+            ImGui::SetNextWindowPos(ImVec2(wx + g_nudge_dx, wy + g_nudge_dy), ImGuiCond_Always);
+            g_nudge_dx = g_nudge_dy = 0;
+        }
+    }
+    if (!pushed_alpha) {
+        ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+    }
+    char title[80];
+    snprintf(title, sizeof title, "%s###dyn%d", a.name, di);
+    bool p_keep = a.open && !a.closing;
+    bool shown = ImGui::Begin(title, &p_keep);
+    if (!p_keep && !a.closing) { a.open = true; a.closing = true; a.close_t0 = now_double(); }
+    if (pushed_alpha) ImGui::PopStyleVar();
+    if (!shown) { ImGui::End(); if (!a.closing) dyn_close(di); return false; }
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = di;
+    return true;
+}
+static void shell_end_dyn(void) { ImGui::End(); }
+
+void igui_build_ui(double t, float fps) {
+    (void)fps;
+    if (++g_dyn_scan_cnt >= 120) { g_dyn_scan_cnt = 0; dyn_scan(); }
+    shell_read_sysfs();
+
+    {
+        float dh = g_dock_covers_sysbar ? 480.0f : (480.0f - SYSBAR_H);
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(800, dh));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("###dockhost", NULL,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBackground);
+        ImGui::DockSpace(ImGui::GetID("DockSpace"), ImVec2(0, 0),
+                         ImGuiDockNodeFlags_PassthruCentralNode);
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(800, 480 - SYSBAR_H));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.05f, 0.09f, g_a_desk));
+    ImGui::Begin("###desktop", NULL,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                 ImGuiWindowFlags_NoNav);
+    {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        if (g_desk_filter[0]) {
+            float fw = 240;
+            dl->AddRectFilled(ImVec2(280, 6), ImVec2(280 + fw, 44), IM_COL32(20, 26, 38, 235), 8.0f);
+            dl->AddRect(ImVec2(280, 6), ImVec2(280 + fw, 44), IM_COL32(90, 200, 240, 200), 8.0f, 0, 2.0f);
+            char fl[72];
+            snprintf(fl, sizeof fl, "> %s", g_desk_filter);
+            float fy = 6 + (38 - ImGui::GetFontSize()) * 0.5f;
+            dl->AddText(ImVec2(294, fy), IM_COL32(235, 240, 245, 255), fl);
+            dl->AddText(ImVec2(280 + fw - 88, fy), IM_COL32(150, 160, 175, 200), "ENTER=open");
+        }
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.08f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(1, 1, 1, 0.16f));
+        const int cols = 4, cellw = 190, cellh = 118;
+        for (int i = 0; i < g_dyn_n; i++) {
+            int col = i % cols, row = i / cols;
+            float bx = 14 + col * cellw, by = 12 + row * cellh;
+            ImGui::SetCursorPos(ImVec2(bx, by));
+            char hid[16];
+            snprintf(hid, sizeof hid, "##desk%d", i);
+            bool on = g_dyn[i].open && !g_dyn[i].mini;
+            static double hold_t0[16] = {0};
+            if (ImGui::InvisibleButton(hid, ImVec2(cellw - 14, cellh - 12))) {
+                if (g_desk_edit) {
+                    if (!g_dyn[i].sys) {
+                        ImVec2 mp = ImGui::GetIO().MousePos;
+                        float cx = bx + cellw - 26, cy = by + 6;
+                        if ((mp.x-cx)*(mp.x-cx)+(mp.y-cy)*(mp.y-cy) < 256) {
+                            g_dyn_dead = i; imrun_vibra_ping(120);
+                        }
+                    }
+                } else dyn_focus(i);
+            }
+            int hi = i < 16 ? i : 15;
+            if (!g_desk_edit && ImGui::IsItemActive()) {
+                if (hold_t0[hi] == 0) hold_t0[hi] = t;
+                else if (t - hold_t0[hi] > 0.5) { g_desk_edit = true; imrun_vibra_ping(60); }
+            } else hold_t0[hi] = 0;
+            bool hot = ImGui::IsItemHovered();
+            bool fmatch = true;
+            if (g_desk_filter[0]) {
+                char ub[40], uf[40];
+                snprintf(ub, sizeof ub, "%s", g_dyn[i].name);
+                for (char *q = ub; *q; q++) *q = (*q>='a'&&*q<='z') ? *q-32 : *q;
+                snprintf(uf, sizeof uf, "%s", g_desk_filter);
+                for (char *q = uf; *q; q++) *q = (*q>='a'&&*q<='z') ? *q-32 : *q;
+                fmatch = strstr(ub, uf) != NULL;
+            }
+            ImVec2 p0 = ImVec2(bx, by), p1 = ImVec2(bx + cellw - 14, by + cellh - 12);
+            if (g_desk_filter[0] && !fmatch) {
+                dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 60), 10.0f);
+                dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 18), 10.0f, 0, 1.0f);
+            } else {
+                dl->AddRectFilled(p0, p1,
+                                  IM_COL32(on ? 40 : 255, on ? 90 : 255, on ? 130 : 255,
+                                           hot ? 66 : 38), 10.0f);
+                dl->AddRect(p0, p1,
+                            (on || (g_desk_filter[0] && fmatch)) ? IM_COL32(90, 200, 240, 240)
+                                                                 : IM_COL32(255, 255, 255, 45),
+                            10.0f, 0, hot ? 2.5f : 1.5f);
+            }
+            if (i == g_desk_nav_sel && !g_desk_edit)
+                dl->AddRect(ImVec2(bx - 3, by - 3), ImVec2(bx + cellw - 11, by + cellh - 9),
+                            IM_COL32(120, 220, 255, 255), 12.0f, 0, 3.5f);
+            if (g_dyn[i].icon)
+                g_dyn[i].icon(dl, bx + (cellw - 14) * 0.5f, by + 34, 17.0f);
+            else
+                shell_draw_icon(-1, ImVec2(bx + (cellw - 14) * 0.5f, by + 34), 17.0f,
+                                g_app_accent[i % 8]);
+            char label[40];
+            snprintf(label, sizeof label, "%s%s", g_dyn[i].name,
+                     g_dyn[i].open ? (g_dyn[i].mini ? " -" : " *") : "");
+            ImVec2 ts = ImGui::CalcTextSize(label);
+            dl->AddText(ImVec2(bx + ((cellw - 14) - ts.x) * 0.5f, by + 76),
+                        IM_COL32(235, 240, 245, 235), label);
+            if (g_desk_edit && !g_dyn[i].sys) {
+                float cx = bx + cellw - 26, cy = by + 6;
+                dl->AddCircleFilled(ImVec2(cx, cy), 11, IM_COL32(220, 50, 50, 255));
+                dl->AddLine(ImVec2(cx - 5, cy - 5), ImVec2(cx + 5, cy + 5), IM_COL32(255,255,255,255), 2.5f);
+                dl->AddLine(ImVec2(cx - 5, cy + 5), ImVec2(cx + 5, cy - 5), IM_COL32(255,255,255,255), 2.5f);
+            }
+        }
+        ImGui::PopStyleColor(3);
+    }
+    if (g_desk_edit) {
+        ImGui::SetCursorPos(ImVec2(700, 398));
+        if (ImGui::Button("DONE", ImVec2(86, 30))) g_desk_edit = false;
+        ImGui::SetCursorPos(ImVec2(10, 404));
+        ImGui::TextColored(vec4f(0.9f, 0.5f, 0.4f, 0.9f), "EDIT MODE: tap red X to uninstall");
+    } else {
+        ImGui::SetCursorPos(ImVec2(10, 404));
+        ImGui::TextColored(vec4f(0.55f, 0.62f, 0.72f, 0.85f),
+                           "IMRUN v" IMRUN_VER " - imgui %s  (type to filter, long-press to edit)",
+                           ImGui::GetVersion());
+    }
+    if (g_dyn_dead >= 0) {
+        int di = g_dyn_dead; g_dyn_dead = -1;
+        DynApp &a = g_dyn[di];
+        a.open = false;
+        if (a.destroy) a.destroy();
+        dlclose(a.h);
+        char cmd[128];
+        snprintf(cmd, sizeof cmd, "rm -rf " APPS_DIR "/%s", a.id);
+        system(cmd);
+        for (int k = di; k < g_dyn_n - 1; k++) g_dyn[k] = g_dyn[k + 1];
+        g_dyn_n--;
+        if (g_focus >= di) g_focus = -1;
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    ImGui::SetNextWindowPos(ImVec2(0, 480 - SYSBAR_H));
+    ImGui::SetNextWindowSize(ImVec2(800, SYSBAR_H));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(3, 3));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, vec4f(0.08f, 0.10f, 0.15f, g_a_bar));
+    ImGui::Begin("###sysbar", NULL,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav);
+    {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        ImU32 line = IM_COL32(235, 240, 245, 255);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+        if (ImGui::InvisibleButton("##back", ImVec2(48, 42))) {
+            g_back_hl = 1.0f;
+            if (ImGui_OpenPopupCount() > 0) ImGui_CloseTopPopup();
+            else igui_close_focused();
+        }
+        {
+            ImVec2 c0 = ImGui::GetItemRectMin();
+            ImVec2 c = ImVec2(c0.x + 24, c0.y + 21);
+            if (g_back_hl > 0)
+                dl->AddEllipseFilled(c, ImVec2(24, 17), IM_COL32(120, 200, 255, (int)(150 * g_back_hl)), 24);
+            dl->AddTriangleFilled(ImVec2(c.x + 6, c.y - 12), ImVec2(c.x + 6, c.y + 12),
+                                  ImVec2(c.x - 8, c.y), line);
+        }
+        ImGui::SameLine();
+        if (ImGui::InvisibleButton("##home", ImVec2(48, 42)))
+            { g_home_hl = 1.0f; dyn_minimize_all(); }
+        {
+            ImVec2 c0 = ImGui::GetItemRectMin();
+            ImVec2 c = ImVec2(c0.x + 24, c0.y + 21);
+            if (g_home_hl > 0)
+                dl->AddEllipseFilled(c, ImVec2(24, 17), IM_COL32(120, 200, 255, (int)(150 * g_home_hl)), 24);
+            dl->AddCircle(c, 12.0f, line, 40, 3.0f);
+        }
+        g_back_hl *= 0.92f; if (g_back_hl < 0.02f) g_back_hl = 0;
+        g_home_hl *= 0.92f; if (g_home_hl < 0.02f) g_home_hl = 0;
+        ImGui::SameLine();
+        for (int i = 0; i < g_dyn_n; i++) {
+            if (!g_dyn[i].open) continue;
+            bool foc = (g_focus == i && !g_dyn[i].mini);
+            bool mini = g_dyn[i].mini;
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
+                                      : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
+            ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, mini ? 0.35f : 0.8f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+            char tag[48];
+            snprintf(tag, sizeof tag, "%s##run%d", g_dyn[i].name, i);
+            static double chip_t0[16] = {0};
+            int ci = i < 16 ? i : 15;
+            if (ImGui::Button(tag, ImVec2(0, 42))) {
+                if (chip_t0[ci] != -1) {
+                    if (mini || !foc) dyn_focus(i);
+                    else dyn_minimize(i);
+                }
+                chip_t0[ci] = 0;
+            }
+            if (ImGui::IsItemActive()) {
+                if (chip_t0[ci] == 0) chip_t0[ci] = ImGui::GetTime();
+                else if (chip_t0[ci] > 0 && ImGui::GetTime() - chip_t0[ci] > 0.5f) {
+                    chip_t0[ci] = -1;
+                    imrun_vibra_ping(80);
+                    dyn_close(i);
+                }
+            } else if (chip_t0[ci] > 0) chip_t0[ci] = 0;
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(4);
+            ImGui::SameLine();
+        }
+        char bat[8] = "--", tmp[8] = "--", clk[8] = "--:--";
+        if (g_batt_pct >= 0) snprintf(bat, sizeof bat, "%d", g_batt_pct);
+        if (g_temp >= 0) snprintf(tmp, sizeof tmp, "%d", g_temp);
+        snprintf(clk, sizeof clk, "%s", shell_clock());
+        ImFont *f = ImGui::GetFont();
+        float fs = ImGui::GetFontSize();
+        float wy = ImGui::GetWindowPos().y;
+        float ytxt = wy + 21 - fs * 0.5f, yc = wy + 21;
+        ImVec2 tc = CalcTextSizeLocal(f, fs, clk);
+        ImVec2 tb = CalcTextSizeLocal(f, fs, bat);
+        strcat(bat, "%"); tb = CalcTextSizeLocal(f, fs, bat);
+        ImVec2 tt = CalcTextSizeLocal(f, fs, tmp);
+        ImVec2 tC = CalcTextSizeLocal(f, fs, "C");
+        const float GAP = 20.0f;
+        float clk_tx = 792 - tc.x, clk_ix = clk_tx - 4 - 18;
+        float bat_tx = clk_ix - GAP - tb.x, bat_ix = bat_tx - 4 - 34;
+        float tmp_Cx = bat_ix - GAP - tC.x, tmp_nx = tmp_Cx - 2 - tt.x, tmp_ix = tmp_nx - 4 - 8;
+        dl->AddCircleFilled(ImVec2(tmp_ix + 4, yc + 9), 4.0f, IM_COL32(235, 90, 80, 255));
+        dl->AddLine(ImVec2(tmp_ix + 4, yc + 9), ImVec2(tmp_ix + 4, yc - 8), IM_COL32(235, 90, 80, 255), 4.0f);
+        dl->AddText(ImVec2(tmp_nx, ytxt), line, tmp);
+        dl->AddText(ImVec2(tmp_Cx, ytxt), IM_COL32(180, 190, 200, 230), "C");
+        dl->AddRect(ImVec2(bat_ix, yc - 7), ImVec2(bat_ix + 30, yc + 9), line, 3.0f, 0, 2.0f);
+        dl->AddRectFilled(ImVec2(bat_ix + 30, yc - 3), ImVec2(bat_ix + 34, yc + 5), line, 1.0f);
+        int pct = g_batt_pct < 0 ? 0 : g_batt_pct;
+        ImU32 col = pct > 40 ? IM_COL32(110, 220, 130, 255)
+                  : pct > 15 ? IM_COL32(235, 190, 80, 255) : IM_COL32(235, 90, 80, 255);
+        if (g_batt_pct >= 0)
+            dl->AddRectFilled(ImVec2(bat_ix + 3, yc - 4), ImVec2(bat_ix + 3 + 24 * pct / 100, yc + 6), col, 2.0f);
+        dl->AddText(ImVec2(bat_tx, ytxt), line, bat);
+        dl->AddCircle(ImVec2(clk_ix + 9, yc), 9.0f, line, 32, 2.0f);
+        dl->AddLine(ImVec2(clk_ix + 9, yc), ImVec2(clk_ix + 9, yc - 6), line, 2.0f);
+        dl->AddLine(ImVec2(clk_ix + 9, yc), ImVec2(clk_ix + 13.5f, yc + 2), line, 2.0f);
+        dl->AddText(ImVec2(clk_tx, ytxt), line, clk);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    for (int di = 0; di < g_dyn_n; di++) {
+        DynApp &a = g_dyn[di];
+        if (!shell_begin_dyn(di, ImVec2(60 + di * 30, 40 + di * 24), ImVec2(440, 320)))
+            continue;
+        a.frame(t);
+        shell_end_dyn();
+    }
+}
+
+'''
+s2 = head + new_shell + s[b:]
+open(p,'w',encoding='utf-8',newline='\n').write(s2)
+print('shell rewritten; lines:', s2.count(chr(10)))

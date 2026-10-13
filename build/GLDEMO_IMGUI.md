@@ -272,3 +272,11 @@
 - 二进制 md5: 65a371b5414b8e9cfe68e4d01561077e（/home/user/imrun/imrun）
 - **桌面启动闪退排查**：以 user 干净环境实测 218 秒稳定（15FPS）——程序本身没问题；真凶锁定为遗留的自测触发文件（gautotest/gopen 曾让启动直接进 AUTOTEST 自动退出模式 = 表现为闪退），已全部清除并修正钩子
 - **黑匣子上机**：SIGSEGV/BUS/ABRT/FPE/ILL 全部捕获写 /home/user/audio_dbg.log（FATAL signal N）+ LIFECYCLE boot/exit 标记——以后任何闪退都有案底，不再盲猜
+
+## IMRUN v0.4（2026-10-14，统一插件架构：系统应用也是插件）
+- 二进制 md5: 20ffbdb655ae7e5823abf21ec3cc4594（/home/user/imrun/imrun）
+- **按用户指示彻底重构**：SYSINFO+WALLPAP→SYSTEM 插件、APPMGR 插件（research/apps/{system,appmgr}），`imapp_system()=1` = 受保护（编辑模式无红叉、APPMGR 拒绝卸载），其余生命周期与普通插件完全一致——**所有 APP 只有一条窗口代码路径**
+- shell 主程序瘦身为纯运行时：dockhost/桌面/系统栏/热扫描/窗口管理，不再包含任何应用内容
+- 宿主新增导出：imrun_dyn_count/name/state/kill/uninstall、imrun_host_rescan、imrun_vibra_ping/stop（插件可调用）
+- 实测：9 插件（7 常规+2 系统）全加载（maps 32 条），SYSTEM/APPMGR 打开存活
+- 闪退案底结论（黑匣子实锤）：之前 v0.3.2 的"修复"没找到真凶——统一架构从根上消灭了内建应用的特殊路径
