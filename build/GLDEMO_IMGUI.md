@@ -69,3 +69,10 @@
 ### 已知尾巴（下一版修）
 - PLAY 开始瞬间约 0.5s 杂音：DMA 重启时重放上次残留缓冲 → 需要 STOP 时 snd_pcm_drop 清缓冲
 - STOP 后偶尔还有余音：停线程后缓冲内最多 0.74s 未播数据继续放完 → 同上，drop 解决
+
+## 发布记录 v8（2026-10-13，tag: audio-release-v8）
+- 二进制 md5: 4103c1fd79c04afd3931409d1ec9f77a（/home/user/gldemo_imgui）
+- 发布包: research/releases/gldemo_imgui_release_v8.tar.gz（源码+二进制+部署脚本+文档+imgui 核心）
+- 源码备份: research/releases/gldemo_imgui_src_backup_20261013.tar.gz
+- 本版特性：全屏直通 81FPS 触摸 ImGui + 停靠 + 多语言 + 硬件面板 + 四波形音频发生器（drop-first 停止/静音垫启动/软件音量 0-1000%）
+- **此版本为音频验收基线，后续改动必须与本版 A/B 对比，不准静默回退**
