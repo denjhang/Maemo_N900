@@ -252,6 +252,7 @@ struct DynApp {
     bool destroyed;
     bool open, mini, ever, cascade, closing;
     bool collapsed, uncoll;          /* native fold = third state */
+    bool mfade; double mfade_t0;     /* minimize fade-out (0.5s) */
     float anim; double anim_t0, close_t0;
 };
 static DynApp g_dyn[8];
@@ -337,6 +338,7 @@ static void dyn_focus(int di) {
     DynApp &a = g_dyn[di];
     bool was_live = a.open && !a.closing && !a.mini;
     if (a.closing) a.closing = false;   /* reopen during fade = cancel */
+    a.mfade = false;                    /* restore cancels minimize fade */
     if (a.destroyed && a.init) { a.init(); a.destroyed = false; }  /* fresh start */
     a.open = true; a.mini = false;
     a.uncoll = true;                 /* opening/focusing always expands */
@@ -350,10 +352,16 @@ static void dyn_focus(int di) {
     g_focus = di;
 }
 static void dyn_minimize(int di) {
-    /* plain mini: for a DOCKED member this removes its tab from the node;
-       minimizing ALL members of a node hides the merged window whole -
-       ImGui remembers the dock layout by node ID, restore is identical */
-    if (di>=0&&di<g_dyn_n) { g_dyn[di].mini = true; if (g_focus==di) g_focus=-1; }
+    /* minimize = 0.5s fade-out then hidden. For a DOCKED member this
+       removes its tab from the node; minimizing ALL members of a node
+       hides the merged window whole - ImGui remembers the dock layout
+       by node ID, restore is identical */
+    if (di<0||di>=g_dyn_n) return;
+    DynApp &a = g_dyn[di];
+    if (a.open && !a.mini && !a.closing && !a.mfade) {
+        a.mfade = true; a.mfade_t0 = now_double();
+    }
+    if (g_focus == di) g_focus = -1;
 }
 static void dyn_minimize_all(void) {
     for (int k = 0; k < g_dyn_n; k++) g_dyn[k].mini = true;
@@ -526,7 +534,7 @@ static void dyn_scan(void) {
         a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
         a.sys = (int (*)(void))dlsym(h, "imapp_system");
         a.open = a.mini = a.ever = a.cascade = a.closing = a.destroyed = false;
-        a.collapsed = a.uncoll = false;
+        a.collapsed = a.uncoll = a.mfade = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
     }
@@ -657,6 +665,7 @@ extern "C" { extern int g_temp; }  /* defined in gldemo hw_thread */
 static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     DynApp &a = g_dyn[di];
     if (a.closing) { /* handled below: fade+destroy even when mini */ }
+    else if (a.mfade) { /* handled below: fade-out to hidden */ }
     else if (!a.open || a.mini) return false;
     bool pushed_alpha = false;
     if (a.cascade) {
