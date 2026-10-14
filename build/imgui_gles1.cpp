@@ -423,10 +423,13 @@ static void settings_load(void) {
 }
 
 static void dyn_scan(void) {
+    /* stagger: ONE new plugin per scan tick (~2s apart) - the startup
+       dlopen storm caused a 5s swap stall and an 18fps burst */
+    int load_budget = 1;
     DIR *d = opendir(APPS_DIR);
     if (!d) return;
     struct dirent *e;
-    while ((e = readdir(d)) && g_dyn_n < 8) {
+    while ((e = readdir(d)) && g_dyn_n < 8 && load_budget > 0) {
         if (e->d_name[0] == '.') continue;
         bool have = false;
         for (int k = 0; k < g_dyn_n; k++)
@@ -450,6 +453,7 @@ static void dyn_scan(void) {
         a.open = a.mini = a.ever = a.cascade = a.closing = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
+        load_budget--;
     }
     closedir(d);
 }
