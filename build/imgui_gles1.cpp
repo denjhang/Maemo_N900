@@ -805,6 +805,24 @@ void igui_build_ui(double t, float fps) {
             }
             if (g_desk_edit && ImGui::IsItemActive() && drag_pos < 0)
                 drag_pos = pos;   /* pick up tile */
+            /* LIVE gap insertion (Android/iOS): while dragging, the hovered
+               slot becomes the drop slot - other tiles animate aside at once */
+            if (g_desk_edit && drag_pos == pos && ImGui::IsItemActive()) {
+                ImVec2 mp = ImGui::GetIO().MousePos;
+                ImVec2 wo = ImGui::GetWindowPos();
+                float mx = mp.x - wo.x, my = mp.y - wo.y;
+                int best = -1; float bestd = 1e9f;
+                for (int q = 0; q < g_order_n; q++) {
+                    float cx = 14 + (q % 4) * 190 + 88, cy = 12 + (q / 4) * 118 + 53;
+                    float d = (mx - cx) * (mx - cx) + (my - cy) * (my - cy);
+                    if (d < bestd) { bestd = d; best = q; }
+                }
+                if (best >= 0 && best != drag_pos) {
+                    order_swap(drag_pos, best);
+                    imrun_settings_touch();
+                    drag_pos = best;
+                }
+            }
             int hi = i < 16 ? i : 15;
             if (!g_desk_edit && ImGui::IsItemActive()) {
                 if (hold_t0[hi] == 0) hold_t0[hi] = t;
