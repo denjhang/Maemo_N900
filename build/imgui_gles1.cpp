@@ -284,6 +284,7 @@ static int g_order_n = 0;
 static char g_order_id[8][40];
 static void order_sync(void) {
     int n = 0;
+    for (int q = 0; q < 8; q++) g_order[q] = -1;   /* stale indices poison dup check */
     for (int q = 0; q < 8 && g_order_id[q][0]; q++) {
         for (int i = 0; i < g_dyn_n; i++) {
             if (strcmp(g_dyn[i].id, g_order_id[q]) == 0) {

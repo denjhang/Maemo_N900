@@ -14,7 +14,28 @@ extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
     dl->PathStroke(ln, 0, 2.5f);
 }
 
+extern "C" {
+void audio_ui_start(int seconds);
+void audio_ui_stop(void);
+extern int audio_on;
+extern double audio_deadline;
+extern int audio_volume, audio_wave;
+void vibra_ping(int ms);
+void vibra_stop(void);
+extern char last_key[64];
+ImFont *imrun_font_cn(void);
+ImFont *imrun_font_world(void);
+ImFont *imrun_font_kr(void);
+double imrun_now(void);
+}
+extern "C" void imapp_destroy(void) {
+    audio_ui_stop();   /* tonegen tab: audio dies with the app */
+    vibra_stop();
+}
+
 extern "C" void imapp_frame(double t) {
+    if (ImGui::BeginTabBar("demotabs")) {
+    if (ImGui::BeginTabItem("HELLO")) {
     /* --- hello --- */
     ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.6f, 1.0f),
                        "hot-loaded plugin - dlopen'd live, no restart");
@@ -57,4 +78,55 @@ extern "C" void imapp_frame(double t) {
     for (int i = 0; i < 64; i++)
         wave[i] = 0.5f + 0.4f * sinf((float)t * 3 + i * 0.4f) * sinf((float)t + i * 0.11f);
     ImGui::PlotLines("Wave", wave, 64, 0, "SGX load", 0.0f, 1.0f, ImVec2(360, 60));
+    ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("TONEGEN")) {
+        if (audio_on) {
+            int left = (int)(audio_deadline - imrun_now());
+            ImGui::Text("ALSA PCM: PLAYING 440Hz (%ds left)", left);
+        } else
+            ImGui::Text("ALSA PCM: idle");
+        if (ImGui::Button("PLAY 20s", ImVec2(140, 48)))
+            audio_ui_start(20);
+        ImGui::SameLine();
+        if (ImGui::Button("STOP", ImVec2(140, 48)))
+            audio_ui_stop();
+        const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
+        ImGui::Combo("WAVE", &audio_wave, waves, 4);
+        ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("VIBRA")) {
+        static int ms = 1000;
+        ImGui::SliderInt("DURATION", &ms, 100, 5000, "%d ms");
+        if (ImGui::Button("VIBRATE", ImVec2(140, 48)))
+            vibra_ping(ms);
+        ImGui::SameLine();
+        if (ImGui::Button("STOP ALL", ImVec2(140, 48)))
+            vibra_stop();
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("KEYS")) {
+        ImGui::Text("last: %s", last_key[0] ? last_key : "(press slide-out keyboard)");
+        ImGui::TextUnformatted("type into: ");
+        ImGui::SameLine();
+        static char textbuf[64] = "";
+        ImGui::InputText("##kb", textbuf, sizeof textbuf);
+        ImGui::Text("CTRL+W close / CTRL+M minimize");
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("FONTS")) {
+        ImFont *cn = imrun_font_cn(), *wr = imrun_font_world(), *kr = imrun_font_kr();
+        if (cn && ImGui::Button("USE CHINESE FONT")) ImGui::GetIO().FontDefault = cn;
+        if (cn) { ImGui::PushFont(cn); ImGui::Text("诺基亚 N900 复活了"); ImGui::PopFont(); }
+        ImGui::Text("FR: Bonjour! Ça marche très bien.");
+        ImGui::Text("DE: Grüße — äöü ß.");
+        ImGui::Text("ES: ¡Hola! El niño juega.");
+        ImGui::Text("RU: Привет, мир!");
+        if (wr) { ImGui::PushFont(wr); ImGui::Text("JP: こんにちは世界"); ImGui::Text("CN: 中文汉字动态烘焙。"); ImGui::PopFont(); }
+        if (kr) { ImGui::PushFont(kr); ImGui::Text("KR: 안녕하세요"); ImGui::PopFont(); }
+        ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+    }
 }

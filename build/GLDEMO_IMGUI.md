@@ -391,3 +391,10 @@
 - **SETTINGS 新增 DISPLAY 页**：FACE（MSYH/BITMAP）、FONT SIZE（10-32px）、UI SCALE（0.6-2.0x）——字体/缩放/DPI 设置回归系统设置（宿主新增导出 imrun_ui_fontface/fontsize/scale）
 - **Demo 合并**：WIDGETS + HELLO + 渲染统计合并为单一 **DEMO** 插件（笑脸图标，用户指定）；imguiset/widgets/hello 三个插件退役
 - 当前插件阵容：2 系统（SETTINGS/APPMGR）+ 6 常规（DEMO/TONEGEN/VIBRA/KEYS/FONTS + repo 备份）
+
+## IMRUN v0.4.19（2026-10-14，最终阵容：3 插件 + 设置回归）
+- 二进制 md5: 94b6e2617dca5ed7517da5a946aa2a39（/home/user/imrun/imrun）
+- **最终阵容**：3 个插件——SETTINGS（WALLPAPER/DISPLAY/INFO/ABOUT 四页）、APPMGR、**DEMO**（六标签：HELLO/WIDGETS/TONEGEN/VIBRA/KEYS/FONTS，此前分散的 5 个应用全部并入；DEMO 的 imapp_destroy 停音频+震动）
+- **修复 order_sync 陈旧索引污染**：g_order 未清零，旧会话索引混入去重判断导致偶发图标消失——每次重建前置 -1
+- 宿主新增导出：imrun_ui_fontface/fontsize/scale（DISPLAY 页调用）
+- 桌面最终形态：SETTINGS + APPMGR + DEMO 三图标，商店含全部备份
