@@ -338,7 +338,9 @@ static void dyn_minimize_all(void) {
     for (int k = 0; k < g_dyn_n; k++) g_dyn[k].mini = true;
     g_focus = -1;
 }
+extern void alog_public(const char *fmt, ...);
 static void dyn_close(int di) {
+    if (di>=0&&di<g_dyn_n) alog_public("DYNCLOSE di=%d name=%s", di, g_dyn[di].name);
     if (di<0||di>=g_dyn_n) return;
     if (g_dyn[di].open && !g_dyn[di].closing) {
         g_dyn[di].closing = true; g_dyn[di].close_t0 = now_double();
@@ -685,9 +687,12 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     bool shown = ImGui::Begin(title, &p_keep);
     if (!p_keep && !a.closing) { a.open = true; a.closing = true; a.close_t0 = now_double(); }
     if (pushed_alpha) ImGui::PopStyleVar();
-    if (!shown) { ImGui::End(); if (!a.closing) dyn_close(di); return false; }
+    /* Begin returns FALSE for COLLAPSED (and clipped) windows - that is NOT
+       a close request. Only p_keep==false (the X button) closes. This was
+       the collapse-vanish bug: collapsed -> Begin false -> dyn_close. */
+    a.collapsed = ImGui::IsWindowCollapsed();   /* valid even when !shown */
+    if (!shown) { ImGui::End(); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = di;
-    a.collapsed = ImGui::IsWindowCollapsed();   /* native fold tracked */
     return true;
 }
 static void shell_end_dyn(void) { ImGui::End(); }

@@ -366,3 +366,9 @@
 - **折叠按原生语义保留**（窗口缩成标题条留在屏上），并成为独立状态：任务栏 chip **淡紫色** = 折叠（区别于蓝色聚焦/暗色最小化）
 - 点折叠后"消失且无法打开"根因：折叠态是 ImGui 窗口自身属性，dyn_focus 只清了 mini——现在 focus 动作强制 SetNextWindowCollapsed(false)（uncoll 标志，Begin 前应用）
 - 状态四件套定型：聚焦=蓝 / 折叠=淡紫 / 最小化=暗色半透 / 关闭=移出任务栏（淡出动画后销毁）
+
+## IMRUN v0.4.14（2026-10-14，折叠消失真凶——一行修复）
+- 二进制 md5: b0f2f078b434d8b1775256b458f1c8a5（/home/user/imrun/imrun）
+- **真凶（读代码实锤）**：ImGui 的 Begin() 对折叠窗口返回 false（SkipItems=true，官方语义=跳过内容仍需 End）——shell 把返回 false 当成了"用户点了关闭"，直接 dyn_close 销毁 → 折叠=消失；且 ini 记住 Collapsed=1 → 重开即折叠 → 再销毁 = "无法再次打开"
+- **修复**：Begin 返回 false ≠ 关闭。只有 p_keep==false（X 按钮）才走关闭流程；折叠态照常追踪（任务栏淡紫 chip）
+- 教训入档：Begin 返回值语义——false = 跳过内容（折叠/裁剪/最小化），≠ 窗口关闭
