@@ -259,6 +259,11 @@ struct DynApp {
                                         of the window's own draw list - it is
                                         the only one that covers chrome AND
                                         widgets AND raw IM_COL32 plugin draws */
+    bool docked_now;                 /* live IsWindowDocked this frame - the
+                                        ONLY valid "content lives in host"
+                                        test. DockId stays set after undock
+                                        (persistent ref) so it must NOT be
+                                        used to pick the fade path */
     bool fade_end;                   /* fade finished THIS frame: host chrome
                                         was already recorded at full alpha in
                                         NewFrame - scale it to 0 or it flashes */
@@ -721,6 +726,7 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     char ttl[80];
     snprintf(ttl, sizeof ttl, "%s###dyn%d", a.name, di);
     bool docked = ImGui_IsWindowDocked(ttl);
+    a.docked_now = docked;
     if (a.mfade) {
         /* minimize fade-out (0.5s) -> hidden at the taskbar. A docked member
            leaves its node KEEPING the DockId at fade end: when the last member
@@ -1209,10 +1215,7 @@ void igui_build_ui(double t, float fps) {
            Group members are skipped here: their content lives in the host's
            list, scaled once by the block below. */
         if (a.fade_k < 1.0f) {
-            extern int ImGui_WindowDockNodeId(const char *);
-            char tn[80];
-            snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
-            if (ImGui_WindowDockNodeId(tn) == 0) {
+            if (!a.docked_now) {   /* content in OWN list: scale here */
                 ImDrawList *dl = ImGui::GetWindowDrawList();
                 for (int v = 0; v < dl->VtxBuffer.Size; v++) {
                     unsigned c = dl->VtxBuffer[v].col;
@@ -1236,6 +1239,9 @@ void igui_build_ui(double t, float fps) {
             if (!a.mfade && a.anim < 1.0f) { /* fading in: scale chrome */ }
             else if (!a.fade_end) continue;   /* mini + fade_end still scales */
             if (a.fade_k >= 1.0f) continue;
+            if (!a.docked_now) continue;   /* undocked: content is in own list,
+                                              handled above - DockId may still
+                                              be set (persistent ref) */
             char tn[80];
             snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
             int nid = ImGui_WindowDockNodeId(tn);

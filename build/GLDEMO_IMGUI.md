@@ -488,3 +488,8 @@
 - 二进制 md5: 9cccbcdf046faa9ac13c085d055cef8（/home/user/imrun/imrun）
 - **v0.4.31 回归根因**：统一顶点缩放时把缩放代码挪到了 `shell_end_dyn()`（End）**之后**——End 之后当前窗口已弹出栈，`GetWindowDrawList()` 返回的是**别的窗口**的 list，四个动画一次都没真正落到窗口上
 - 修法：缩放移回 `End()` 之前（窗口仍是当前窗口时取 list）。教训：顶点后处理必须在目标窗口的 Begin/End 区间内做
+
+## IMRUN v0.4.33（2026-10-15，解除分组后动画失效修复）
+- 二进制 md5: ac9da0678afd38c9c7fb59a8ab9c2101（/home/user/imrun/imrun）
+- **根因**：v0.4.27 把 ImGui_WindowDockNodeId 改为返回 w->DockId，而 DockId 在解除停靠后**依然保留**（这正是恢复分组的持久引用）——浮动缩放块用 `WindowDockNodeId==0` 判"不在组里"，对**曾经停靠过的窗口永远不成立**：自身块跳过、host 块又拿不到 host（已解散），两头落空 → 只要进过一次组，之后单独窗口动画全失效
+- 修法：DynApp 增加 `docked_now`（每帧 Begin 前的 IsWindowDocked 实测值），作为"内容在 host list 里"的**唯一判据**；自身块和 host 块都用它分流。教训：DockId 表达"曾经/将来的组关系"，DockIsActive 才表达"此刻渲染在哪"
