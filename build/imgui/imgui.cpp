@@ -5587,22 +5587,31 @@ void ImGui::UpdateMouseMovingWindowEndFrame()
         }
     }
 
-    // IMRUN patch #3: touch drag on empty background scrolls the hovered
-    // window (Android-style). The resistive screen has no wheel; the grab
-    // scrollbar is too small for a finger. Only when no widget is active and
-    // the touch didn't latch onto a window move (empty-body clicks keep
-    // ActiveId == MoveId with MovingWindow == NULL - allow those).
-    if (g.IO.MouseDown[0] && g.MovingWindow == NULL && g.HoveredId == 0 &&
-        (g.IO.MouseDelta.x != 0.0f || g.IO.MouseDelta.y != 0.0f))
+    // IMRUN patch #3 (v2): touch drag on empty background = VERTICAL-ONLY
+    // page scrolling with DAMPING (exponential approach - never a jump).
+    // Vertical only: horizontal swipes are meaningless on this launcher.
+    // Per-window scroll targets in a tiny static table.
+    static ImGuiWindow* dsw[4] = {};
+    static float dtgt[4] = {};
+    ImGuiWindow* sw = g.HoveredWindow;
+    if (sw != NULL && g.IO.MouseDown[0] && g.MovingWindow == NULL &&
+        g.HoveredId == 0 && g.IO.MouseDelta.y != 0.0f &&
+        (g.ActiveId == 0 || g.ActiveId == sw->RootWindow->MoveId) &&
+        sw->ScrollMax.y > 0.0f)
     {
-        ImGuiWindow* sw = g.HoveredWindow;
-        if (sw != NULL && (g.ActiveId == 0 || g.ActiveId == sw->RootWindow->MoveId))
-        {
-            if (sw->ScrollMax.y > 0.0f)
-                sw->Scroll.y = ImClamp(sw->Scroll.y - g.IO.MouseDelta.y, 0.0f, sw->ScrollMax.y);
-            if (sw->ScrollMax.x > 0.0f)
-                sw->Scroll.x = ImClamp(sw->Scroll.x - g.IO.MouseDelta.x, 0.0f, sw->ScrollMax.x);
-        }
+        int slot = -1;
+        for (int q = 0; q < 4; q++) if (dsw[q] == sw) slot = q;
+        if (slot < 0) { for (int q = 0; q < 4; q++) if (!dsw[q]) { slot = q; dsw[q] = sw; dtgt[q] = sw->Scroll.y; break; } }
+        if (slot < 0) { slot = 0; dsw[0] = sw; dtgt[0] = sw->Scroll.y; }
+        dtgt[slot] = ImClamp(dtgt[slot] - g.IO.MouseDelta.y * 1.6f, 0.0f, sw->ScrollMax.y);
+    }
+    for (int q = 0; q < 4; q++)
+    {
+        ImGuiWindow* w = dsw[q];
+        if (!w || w->LastFrameActive < g.FrameCount - 1) { dsw[q] = NULL; continue; }
+        float diff = dtgt[q] - w->Scroll.y;
+        if (diff > 0.5f || diff < -0.5f)
+            w->Scroll.y += diff * 0.35f;   // exponential damping each frame
     }
 
     // With right mouse button we close popups without changing focus based on where the mouse is aimed

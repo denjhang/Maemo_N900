@@ -1024,6 +1024,7 @@ int main(void) {
     double last_report = t0;
     int report_frames = 0;
     while (1) {
+        double ph0 = now();
         /* pump X11 input -> ImGui */
         if (pXPending && pXNextEvent) {
             /* 32-bit Xlib event layout (core pointer events only) */
@@ -1185,13 +1186,37 @@ int main(void) {
         pglLoadIdentity();
         pglMatrixMode(GL_MODELVIEW);
         pglLoadIdentity();
+        double ph1 = now();
         igui_newframe(dt);
         igui_build_ui(el, fps);
+        double ph2 = now();
         igui_render();
+        double ph3 = now();
         if (!peglSwapBuffers(eglD, eglS))
             printf("SWAP FAIL err=%x frame=%d\n", peglGetError(), frames);
         frames++;
         report_frames++;
+        {   /* frame profiler: where does the time go? (every 180 frames) */
+            static double p_max[3] = {0,0,0}, p_sum[3] = {0,0,0}, p_t0 = 0;
+            static int p_n = 0, p_stall = 0;
+            double ph4 = now();
+            double d[3] = { (ph1 - ph0) * 1000.0, (ph3 - ph2) * 1000.0, (ph4 - ph3) * 1000.0 };
+            double tot = (ph4 - ph0) * 1000.0;
+            for (int q = 0; q < 3; q++) {
+                if (d[q] > p_max[q]) p_max[q] = d[q];
+                p_sum[q] += d[q];
+            }
+            if (tot > 50.0) p_stall++;
+            if (p_n == 0) p_t0 = ph4;
+            if (++p_n >= 180) {
+                double fps = 180.0 / (ph4 - p_t0);
+                alog("PROF fps=%.1f pump=%.1f(max%.1f) ui=%.1f(max%.1f) swap=%.1f(max%.1f) stalls50ms=%d",
+                     fps, p_sum[0]/p_n, p_max[0], p_sum[1]/p_n, p_max[1],
+                     p_sum[2]/p_n, p_max[2], p_stall);
+                for (int q = 0; q < 3; q++) { p_max[q] = 0; p_sum[q] = 0; }
+                p_n = 0; p_stall = 0;
+            }
+        }
         if (frames % 300 == 0) {
             unsigned gerr = pglGetError();
             printf("DBG f=%d t=%.2f el=%.2f sinf=%.3f cosf=%.3f gerr=%x\n",
