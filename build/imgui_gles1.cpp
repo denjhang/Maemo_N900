@@ -246,6 +246,7 @@ struct DynApp {
     void (*icon)(void *dl, float cx, float cy, float s);
     int (*sys)(void);
     bool open, mini, ever, cascade, closing;
+    bool collapsed, uncoll;          /* native fold = third state */
     float anim; double anim_t0, close_t0;
 };
 static DynApp g_dyn[8];
@@ -328,6 +329,7 @@ static void dyn_focus(int di) {
     DynApp &a = g_dyn[di];
     if (!a.ever) { a.cascade = true; a.ever = true; }
     a.open = true; a.mini = false;
+    a.uncoll = true;                 /* opening/focusing always expands */
     a.anim = 0; a.anim_t0 = now_double();
     g_focus = di;
 }
@@ -502,6 +504,7 @@ static void dyn_scan(void) {
         a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
         a.sys = (int (*)(void))dlsym(h, "imapp_system");
         a.open = a.mini = a.ever = a.cascade = a.closing = false;
+        a.collapsed = a.uncoll = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
         load_budget--;
@@ -675,6 +678,7 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
         ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
     }
+    if (a.uncoll) { ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always); a.uncoll = false; }
     char title[80];
     snprintf(title, sizeof title, "%s###dyn%d", a.name, di);
     bool p_keep = a.open && !a.closing;
@@ -683,6 +687,7 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     if (pushed_alpha) ImGui::PopStyleVar();
     if (!shown) { ImGui::End(); if (!a.closing) dyn_close(di); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = di;
+    a.collapsed = ImGui::IsWindowCollapsed();   /* native fold tracked */
     return true;
 }
 static void shell_end_dyn(void) { ImGui::End(); }
@@ -955,7 +960,8 @@ void igui_build_ui(double t, float fps) {
             bool foc = (g_focus == i && !g_dyn[i].mini);
             bool mini = g_dyn[i].mini;
             ImGui::PushStyleColor(ImGuiCol_Button,
-                                  foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
+                                  g_dyn[i].collapsed ? vec4f(0.45f, 0.35f, 0.68f, 1)   /* folded: light purple */
+                                  : foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
                                       : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
@@ -977,7 +983,7 @@ void igui_build_ui(double t, float fps) {
             int ci = i < 16 ? i : 15;
             if (ImGui::Button(tag, ImVec2(0, 42))) {
                 if (chip_t0[ci] != -1) {
-                    if (mini || !foc) dyn_focus(i);
+                    if (g_dyn[i].collapsed || mini || !foc) dyn_focus(i);
                     else dyn_minimize(i);
                 }
                 chip_t0[ci] = 0;
