@@ -252,6 +252,7 @@ struct DynApp {
     bool destroyed;
     bool open, mini, ever, cascade, closing;
     bool collapsed, uncoll;          /* native fold = third state */
+    bool undock_req, mini_pending;   /* minimize of a DOCKED window */
     float anim; double anim_t0, close_t0;
 };
 static DynApp g_dyn[8];
@@ -342,7 +343,19 @@ static void dyn_focus(int di) {
     a.anim = 0; a.anim_t0 = now_double();
     g_focus = di;
 }
-static void dyn_minimize(int di) { if (di>=0&&di<g_dyn_n) { g_dyn[di].mini = true; if (g_focus==di) g_focus=-1; } }
+static void dyn_minimize(int di) {
+    if (di<0||di>=g_dyn_n) return;
+    DynApp &a = g_dyn[di];
+    extern bool ImGui_IsWindowDocked(const char *);
+    char tn[80];
+    snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
+    if (a.open && !a.closing && ImGui_IsWindowDocked(tn)) {
+        a.undock_req = true;      /* Begin undocks this frame... */
+        a.mini_pending = true;    /* ...then we hide it the next */
+    } else
+        a.mini = true;
+    if (g_focus == di) g_focus = -1;
+}
 static void dyn_minimize_all(void) {
     for (int k = 0; k < g_dyn_n; k++) g_dyn[k].mini = true;
     g_focus = -1;
@@ -514,7 +527,7 @@ static void dyn_scan(void) {
         a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
         a.sys = (int (*)(void))dlsym(h, "imapp_system");
         a.open = a.mini = a.ever = a.cascade = a.closing = a.destroyed = false;
-        a.collapsed = a.uncoll = false;
+        a.collapsed = a.uncoll = a.undock_req = a.mini_pending = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
     }
@@ -989,60 +1002,100 @@ void igui_build_ui(double t, float fps) {
         g_back_hl *= 0.92f; if (g_back_hl < 0.02f) g_back_hl = 0;
         g_home_hl *= 0.92f; if (g_home_hl < 0.02f) g_home_hl = 0;
         ImGui::SameLine();
-        for (int i = 0; i < g_dyn_n; i++) {
-            if (!g_dyn[i].open) continue;
-            bool foc = (g_focus == i && !g_dyn[i].mini);
-            bool mini = g_dyn[i].mini;
-            {   /* state color with smooth transition (lerp toward target) */
-                static float chip_rgb[16][3];
-                float tgt[3];
-                if (g_dyn[i].collapsed) { tgt[0]=0.45f; tgt[1]=0.35f; tgt[2]=0.68f; }       /* folded: purple */
-                else if (foc)           { tgt[0]=0.16f; tgt[1]=0.42f; tgt[2]=0.60f; }       /* focus: blue */
-                else if (mini)          { tgt[0]=0.06f; tgt[1]=0.08f; tgt[2]=0.12f; }       /* min: dim */
-                else                    { tgt[0]=0.12f; tgt[1]=0.16f; tgt[2]=0.24f; }       /* normal: dark */
-                int cq = i < 16 ? i : 15;
-                for (int q = 0; q < 3; q++)
-                    chip_rgb[cq][q] += (tgt[q] - chip_rgb[cq][q]) * 0.12f;
-                float a = mini ? 0.5f : 1.0f;
+        /* running apps: dock-node-aware chips.
+           floating windows -> one chip each; windows docked into the same
+           node -> ONE group chip (label = selected member + count). */
+        {
+            int grp_node[8] = {0};
+            static int grp_mem[8][8];
+            int grp_cnt = 0;
+            int vis[8], vis_n = 0;
+            static int grp_n[8] = {0};
+            for (int i = 0; i < g_dyn_n; i++) {
+                if (!g_dyn[i].open || g_dyn[i].mini) continue;
+                char tn[80];
+                snprintf(tn, sizeof tn, "%s###dyn%d", g_dyn[i].name, i);
+                extern int ImGui_WindowDockNodeId(const char *);
+                int nid = ImGui_WindowDockNodeId(tn);
+                if (nid == 0) { vis[vis_n++] = i; continue; }
+                int g = -1;
+                for (int q = 0; q < grp_cnt; q++) if (grp_node[q] == nid) g = q;
+                if (g < 0 && grp_cnt < 8) { g = grp_cnt++; grp_node[g] = nid; grp_n[g] = 0; }
+                if (g >= 0 && grp_n[g] < 8) grp_mem[g][grp_n[g]++] = i;
+            }
+            for (int q = 0; q < vis_n; q++) {
+                int i = vis[q];
+                bool foc = (g_focus == i);
+                bool mini = g_dyn[i].mini;
                 ImGui::PushStyleColor(ImGuiCol_Button,
-                                      vec4f(chip_rgb[cq][0], chip_rgb[cq][1], chip_rgb[cq][2], a));
-            }
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
-            ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, mini ? 0.35f : 0.8f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-            {   /* chip fades IN/OUT with its window */
-                float ca = 1.0f;
-                if (g_dyn[i].closing) {
-                    float ct = (float)(now_double() - g_dyn[i].close_t0) / 0.5f;
-                    ca = ct >= 1 ? 0 : 1 - ct * ct * (3 - 2 * ct);
-                } else if (g_dyn[i].anim < 1.0f) {
-                    ca = g_dyn[i].anim * g_dyn[i].anim * (3 - 2 * g_dyn[i].anim);
+                                      foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
+                                          : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
+                ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, mini ? 0.35f : 0.8f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+                char tag[48];
+                snprintf(tag, sizeof tag, "%s##run%d", g_dyn[i].name, i);
+                static double chip_t0[16] = {0};
+                int ci = i < 16 ? i : 15;
+                if (ImGui::Button(tag, ImVec2(0, 42))) {
+                    if (chip_t0[ci] != -1) {
+                        if (mini || !foc) dyn_focus(i);
+                        else dyn_minimize(i);
+                    }
+                    chip_t0[ci] = 0;
                 }
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ca);
+                if (ImGui::IsItemActive()) {
+                    if (chip_t0[ci] == 0) chip_t0[ci] = ImGui::GetTime();
+                    else if (chip_t0[ci] > 0 && ImGui::GetTime() - chip_t0[ci] > 0.5f) {
+                        chip_t0[ci] = -1;
+                        imrun_vibra_ping(80);
+                        dyn_close(i);
+                    }
+                } else if (chip_t0[ci] > 0) chip_t0[ci] = 0;
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(4);
+                ImGui::SameLine();
             }
-            char tag[48];
-            snprintf(tag, sizeof tag, "%s##run%d", g_dyn[i].name, i);
-            static double chip_t0[16] = {0};
-            int ci = i < 16 ? i : 15;
-            if (ImGui::Button(tag, ImVec2(0, 42))) {
-                if (chip_t0[ci] != -1) {
-                    if (g_dyn[i].collapsed || mini || !foc) dyn_focus(i);
-                    else dyn_minimize(i);
+            /* group chips: one per dock node */
+            for (int g = 0; g < grp_cnt; g++) {
+                if (grp_n[g] == 0) continue;
+                int sel = grp_mem[g][0];
+                for (int q = 0; q < grp_n[g]; q++)
+                    if (grp_mem[g][q] == g_focus) sel = g_focus;
+                bool foc = (g_focus == sel);
+                char label[64];
+                snprintf(label, sizeof label, "%s+%d", g_dyn[sel].name, grp_n[g] - 1);
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
+                                          : vec4f(0.20f, 0.16f, 0.34f, 1));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.26f, 0.22f, 0.42f, 1));
+                ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.55f, 0.45f, 0.75f, 0.8f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+                char tag[80];
+                snprintf(tag, sizeof tag, "%s##grp%d", label, grp_node[g]);
+                static double gchip_t0[8] = {0};
+                int ci = g < 8 ? g : 7;
+                if (ImGui::Button(tag, ImVec2(0, 42))) {
+                    if (gchip_t0[ci] != -1) {
+                        if (!foc) dyn_focus(sel);
+                        else for (int q = 0; q < grp_n[g]; q++) dyn_minimize(grp_mem[g][q]);
+                    }
+                    gchip_t0[ci] = 0;
                 }
-                chip_t0[ci] = 0;
+                if (ImGui::IsItemActive()) {
+                    if (gchip_t0[ci] == 0) gchip_t0[ci] = ImGui::GetTime();
+                    else if (gchip_t0[ci] > 0 && ImGui::GetTime() - gchip_t0[ci] > 0.5f) {
+                        gchip_t0[ci] = -1;
+                        imrun_vibra_ping(80);
+                        for (int q = 0; q < grp_n[g]; q++) dyn_close(grp_mem[g][q]);
+                    }
+                } else if (gchip_t0[ci] > 0) gchip_t0[ci] = 0;
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(4);
+                ImGui::SameLine();
             }
-            if (ImGui::IsItemActive()) {
-                if (chip_t0[ci] == 0) chip_t0[ci] = ImGui::GetTime();
-                else if (chip_t0[ci] > 0 && ImGui::GetTime() - chip_t0[ci] > 0.5f) {
-                    chip_t0[ci] = -1;
-                    imrun_vibra_ping(80);
-                    dyn_close(i);
-                }
-            } else if (chip_t0[ci] > 0) chip_t0[ci] = 0;
-            ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor(4);
-            ImGui::SameLine();
         }
         char bat[12] = "--", tmp[8] = "--", clk[8] = "--:--";
         if (g_batt_pct >= 0) snprintf(bat, sizeof bat, "%d", g_batt_pct);

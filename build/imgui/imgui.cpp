@@ -1401,6 +1401,12 @@ extern "C" void ImGui_SetWindowFocusByName(const char* name)
     ImGuiWindow* w = FindWindowByName(name);
     if (w) FocusWindow(w);
 }
+extern "C" int ImGui_WindowDockNodeId(const char* name)
+{
+    ImGuiWindow* w = FindWindowByName(name);
+    if (w == NULL || w->DockNode == NULL) return 0;
+    return (int)w->DockNode->ID;
+}
 extern "C" bool ImGui_GetWindowPosByName(const char* name, float* x, float* y)
 {
     ImGuiWindow* w = FindWindowByName(name);

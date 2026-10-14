@@ -416,3 +416,8 @@
   - **【中】destroy/init 对称化**：新增 destroyed 标志——destroy 只调一次；重开先 init（杜绝 use-after-free 契约漏洞）；卸载路径守卫二次 destroy
   - **【中】音频自然到期状态失真**：thread_run=1/audio_on=1 残留——break 前清零
   - 【低】bat[8] 溢出（pct 钳位+snprintf）、vsscanf 空指针守卫、XGetVisualInfo 泄漏备查；跨线程 int 变量审查通过（g_wall_t double 撕裂可接受，250Hz 自愈）
+
+## IMRUN v0.4.21（2026-10-14，任务栏分组 + 停靠最小化修复）
+- 二进制 md5: d1bfb9c43d9f31676151a4fe2901f435（/home/user/imrun/imrun）
+- **任务栏按 dock 组对待**（核心导出 ImGui_WindowDockNodeId）：浮动窗口各占一个 chip；同节点停靠的窗口合并为**一个组 chip**（标签 = 选中成员名 +N，紫色调区别于单窗）——组 chip 点击=聚焦选中成员标签、再点=整组最小化、长按=整组关闭；**拆分后自动恢复 individual chips**（每帧按 dock 节点 ID 重新分组，无需手动刷新）
+- **停靠窗口最小化修复**：此前对停靠窗口置 mini 会让 ImGui 停止提交该窗口但 dock 标签残留=状态卡死。现改为两段式——先解除停靠一帧（Begin 消化 PosUndock），下一帧再隐藏
