@@ -135,11 +135,16 @@ static void *hPTHREAD;
 static int (*pthread_create_fn)(unsigned long *, void *, void *(*)(void *), void *);
 static int (*pthread_join_fn)(unsigned long, void **);
 static int (*usleep_fn)(unsigned int);
+int g_temp = -1;   /* exported to shell sysbar (thread-fed) */
 static void *hw_thread(void *arg) {
     (void)arg;
     void (*sam)(void) = (void (*)(void))arg;
     while (1) {
-        sam();  /* reads /proc+/sys: blocking flash I/O, NEVER in UI thread */
+        sam();  /* /proc+/sys reads: blocking flash I/O, NEVER in UI thread */
+        {
+            FILE *f = fopen("/sys/class/hwmon/hwmon0/device/temp1_input", "r");
+            if (f) { char ln[64]; if (fgets(ln, sizeof ln, f)) g_temp = atoi(ln); fclose(f); }
+        }
         if (usleep_fn) usleep_fn(10000000);
     }
     return NULL;

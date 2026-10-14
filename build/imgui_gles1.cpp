@@ -280,7 +280,6 @@ static float g_back_hl = 0, g_home_hl = 0;
 
 static int g_focus = -1;
 static void dyn_focus(int di) {
-    g_desk_nav_sel = -1; g_desk_nav_on = false;
     if (di < 0 || di >= g_dyn_n) return;
     DynApp &a = g_dyn[di];
     if (!a.ever) { a.cascade = true; a.ever = true; }
@@ -294,7 +293,6 @@ static void dyn_minimize_all(void) {
     g_focus = -1;
 }
 static void dyn_close(int di) {
-    g_desk_nav_sel = -1; g_desk_nav_on = false;
     if (di<0||di>=g_dyn_n) return;
     if (g_dyn[di].open && !g_dyn[di].closing) {
         g_dyn[di].closing = true; g_dyn[di].close_t0 = now_double();
@@ -557,14 +555,7 @@ static ImVec2 CalcTextSizeLocal(ImFont *f, float fs, const char *s) {
     return f->CalcTextSizeA(fs, 1000000.0f, 0.0f, s);
 }
 extern "C" int g_batt_pct;
-static int g_temp = -1;
-static void shell_read_sysfs(void) {
-    static int cnt = 0;
-    if (++cnt % 90) return;
-    char line[64];
-    FILE *f = fopen("/sys/class/hwmon/hwmon0/device/temp1_input", "r");
-    if (f) { if (fgets(line, sizeof line, f)) g_temp = atoi(line); fclose(f); }
-}
+extern "C" { extern int g_temp; }  /* defined in gldemo hw_thread */
 
 static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     DynApp &a = g_dyn[di];
@@ -597,17 +588,8 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
         if (t >= 1.0f) {
             a.open = false; a.closing = false; a.mini = false;
             if (a.destroy) a.destroy();
-            /* hand focus to the next open app - no desktop focus jump */
-            for (int k = 0; k < g_dyn_n; k++) {
-                if (g_dyn[k].open && !g_dyn[k].mini && !g_dyn[k].closing) {
-                    extern void ImGui_SetWindowFocusByName(const char *);
-                    char tn2[80];
-                    snprintf(tn2, sizeof tn2, "%s###dyn%d", g_dyn[k].name, k);
-                    ImGui_SetWindowFocusByName(tn2);
-                    g_focus = k;
-                    break;
-                }
-            }
+            /* DECOUPLED: closing an app never touches desktop/UI focus -
+               the desktop keeps whatever state the user left it in */
             return false;
         }
         float e = t * t * (3 - 2 * t);
@@ -653,17 +635,18 @@ void igui_build_ui(double t, float fps) {
     (void)fps;
     static bool s_loaded = false;
     if (!s_loaded) { s_loaded = true; settings_load(); }
-    {   /* signature-based autosave: any settings change flushes within 1s */
+    {   /* autosave ONLY when a setting actually changed (periodic writes
+           caused the ~1s stutter: flash write in the UI thread) */
         static int s_last_sig = -999999;
-        static int s_save_cnt = 0;
         int sig = g_wall_mode + g_wall_variant * 8
                 + (int)(g_a_win * 131) + (int)(g_a_bar * 197) + (int)(g_a_desk * 251)
                 + (g_dock_covers_sysbar ? 10000 : 0);
-        if (sig != s_last_sig) { s_last_sig = sig; s_save_cnt = 0; }
-        if (++s_save_cnt > 60) { s_save_cnt = 0; settings_save(); }
+        if (sig != s_last_sig) {
+            if (s_last_sig != -999999) settings_save();
+            s_last_sig = sig;
+        }
     }
     if (++g_dyn_scan_cnt >= 120) { g_dyn_scan_cnt = 0; dyn_scan(); }
-    shell_read_sysfs();
 
     {
         float dh = g_dock_covers_sysbar ? 480.0f : (480.0f - SYSBAR_H);
@@ -929,6 +912,20 @@ void igui_build_ui(double t, float fps) {
         if (!shell_begin_dyn(di, ImVec2(60 + di * 30, 40 + di * 24), ImVec2(440, 320)))
             continue;
         a.frame(t);
+        if (a.closing) {
+            /* guaranteed content fade: scale EVERY vertex alpha in this
+               window's draw list (text+widgets included - style alpha alone
+               does not reach plugin content) */
+            float e = (float)(now_double() - a.close_t0) / 0.5f;
+            if (e > 1) e = 1;
+            float k = 1.0f - (e * e * (3 - 2 * e));
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            for (int v = 0; v < dl->VtxBuffer.Size; v++) {
+                unsigned c = dl->VtxBuffer[v].col;
+                unsigned al = (unsigned)(((c >> 24) & 0xFF) * k);
+                dl->VtxBuffer[v].col = (c & 0x00FFFFFF) | (al << 24);
+            }
+        }
         shell_end_dyn();
     }
 }
