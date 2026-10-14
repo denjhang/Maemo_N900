@@ -19773,8 +19773,10 @@ static void ImGui::DockNodeUpdateTabBar(ImGuiDockNode* node, ImGuiWindow* host_w
                 focus_tab_id = tab_bar->SelectedTabId;
 
             // Forward moving request to selected window
+            // IMRUN patch: dragging ANYWHERE on the title bar (incl. empty
+            // area, no tabs/text) undocks - dragging was dead on blank areas
             if (ImGuiTabItem* tab = TabBarFindTabByID(tab_bar, tab_bar->SelectedTabId))
-                StartMouseMovingWindowOrNode(tab->Window ? tab->Window : node->HostWindow, node, false); // Undock from tab bar empty space
+                StartMouseMovingWindowOrNode(tab->Window ? tab->Window : node->HostWindow, node, true);
         }
     }
 

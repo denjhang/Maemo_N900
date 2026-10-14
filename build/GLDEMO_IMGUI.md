@@ -376,3 +376,7 @@
 ## IMRUN v0.4.15（2026-10-14，任务栏状态色平滑渐变）
 - 二进制 md5: cdd1736741407d18ca6a5b217b04d34b（/home/user/imrun/imrun）
 - 任务栏 chip 状态色改为逐帧插值（12% 收敛）：聚焦蓝 / 折叠淡紫 / 最小化暗 / 常态深灰之间切换时颜色平滑过渡，不再瞬跳；按住绿色仍由 ButtonActive 即时呈现（按压反馈需要即时性）
+
+## IMRUN v0.4.16（2026-10-14，标题栏任意位置可解停靠）
+- 二进制 md5: 7c67562ff4e5aea87bf9b250c99d1583（/home/user/imrun/imrun）
+- **核心补丁 #6**：ImGui 源码 DockNodeUpdateTabBar 里空白标题栏拖动调用 StartMouseMovingWindowOrNode(..., node, **false**)——undock=false 意味着空白区只能整组移动、永远解不了停靠（用户实测"没字的蓝色区域拖不动"）。改 **true**：拖标题栏任意位置（有字没字、有无标签）都能解除停靠
