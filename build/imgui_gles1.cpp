@@ -252,8 +252,16 @@ struct DynApp {
     bool destroyed;
     bool open, mini, ever, cascade, closing;
     bool collapsed, uncoll;          /* native fold = third state */
-    bool collapse_req;               /* docked minimize = native collapse */
     bool mfade; double mfade_t0;     /* minimize fade-out (0.5s) */
+    float fade_k;                    /* this frame's fade factor (1=opaque).
+                                        ALL fades (open/close/min/restore) use
+                                        ONE mechanism: per-vertex alpha scaling
+                                        of the window's own draw list - it is
+                                        the only one that covers chrome AND
+                                        widgets AND raw IM_COL32 plugin draws */
+    bool fade_end;                   /* fade finished THIS frame: host chrome
+                                        was already recorded at full alpha in
+                                        NewFrame - scale it to 0 or it flashes */
     float anim; double anim_t0, close_t0;
 };
 static DynApp g_dyn[8];
@@ -352,22 +360,48 @@ static void dyn_focus(int di) {
     g_desk_nav_sel = -1; g_desk_nav_on = false;
     g_focus = di;
 }
+extern void ImGui_UndockWindowKeepRef(const char *name);
 static void dyn_minimize(int di) {
     if (di<0||di>=g_dyn_n) return;
     DynApp &a = g_dyn[di];
     extern bool ImGui_IsWindowDocked(const char *);
+    extern int ImGui_WindowDockNodeId(const char *);
     char tn[80];
     snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
     if (a.open && !a.closing && !a.mfade) {
-        if (ImGui_IsWindowDocked(tn))
-            a.collapse_req = true;    /* docked: native collapse -> tab strip */
-        else
-            { a.mfade = true; a.mfade_t0 = now_double(); }  /* floating: fade out */
+        /* a merged group IS one window: minimizing ANY member fades out the
+           WHOLE group through the exact same path as a floating window */
+        int nid = ImGui_WindowDockNodeId(tn);
+        int hit = 0;
+        for (int k = 0; k < g_dyn_n; k++) {
+            DynApp &m = g_dyn[k];
+            if (!m.open || m.closing || m.mfade) continue;
+            char kn[80];
+            snprintf(kn, sizeof kn, "%s###dyn%d", m.name, k);
+            if (nid != 0 && ImGui_WindowDockNodeId(kn) == nid) {
+                m.mfade = true; m.mfade_t0 = now_double();
+                hit++;
+            }
+        }
+        if (!hit) { a.mfade = true; a.mfade_t0 = now_double(); }
     }
     if (g_focus == di) g_focus = -1;
 }
 static void dyn_minimize_all(void) {
-    for (int k = 0; k < g_dyn_n; k++) g_dyn[k].mini = true;
+    for (int k = 0; k < g_dyn_n; k++) {
+        DynApp &m = g_dyn[k];
+        if (!m.open || m.mini) continue;
+        /* docked members must leave their node (keeping the DockId ref),
+           otherwise the group host keeps rendering with zero members */
+        char kn[80];
+        snprintf(kn, sizeof kn, "%s###dyn%d", m.name, k);
+        if (m.mfade) {  /* already fading: finish now */
+            if (ImGui_IsWindowDocked(kn)) ImGui_UndockWindowKeepRef(kn);
+            m.mfade = false;
+        } else if (ImGui_IsWindowDocked(kn))
+            ImGui_UndockWindowKeepRef(kn);
+        m.mini = true;
+    }
     g_focus = -1;
 }
 extern void alog_public(const char *fmt, ...);
@@ -538,6 +572,7 @@ static void dyn_scan(void) {
         a.sys = (int (*)(void))dlsym(h, "imapp_system");
         a.open = a.mini = a.ever = a.cascade = a.closing = a.destroyed = false;
         a.collapsed = a.uncoll = a.mfade = false;
+        a.fade_k = 1.0f; a.fade_end = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
     }
@@ -670,7 +705,7 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     if (a.closing) { /* handled below: fade+destroy even when mini */ }
     else if (a.mfade) { /* handled below: fade-out to hidden */ }
     else if (!a.open || a.mini) return false;
-    bool pushed_alpha = false;
+    a.fade_k = 1.0f; a.fade_end = false;
     if (a.cascade) {
         a.cascade = false;
         static int casc_seq = 0;
@@ -686,7 +721,22 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     char ttl[80];
     snprintf(ttl, sizeof ttl, "%s###dyn%d", a.name, di);
     bool docked = ImGui_IsWindowDocked(ttl);
-    if (a.closing) {
+    if (a.mfade) {
+        /* minimize fade-out (0.5s) -> hidden at the taskbar. A docked member
+           leaves its node KEEPING the DockId at fade end: when the last member
+           of the group leaves, ImGui hides the whole group host natively, and
+           every member re-docks into the same group when shown again. */
+        float t = (float)(now_double() - a.mfade_t0) / 0.5f;
+        if (t >= 1.0f) {
+            if (docked) ImGui_UndockWindowKeepRef(ttl);
+            a.mfade = false; a.mini = true;
+            a.fade_k = 0.0f; a.fade_end = true;
+            return false;
+        }
+        float e = t * t * (3 - 2 * t);
+        a.fade_k = 1.0f - e;   /* vertex-scaled after content (see frame loop) */
+    }
+    else if (a.closing) {
         if (docked) {  /* undock so the fade covers the CONTENT too
                           (docked content draws into the host's list) */
             extern bool ImGui_GetWindowPosByName(const char *, float *, float *);
@@ -704,16 +754,16 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
             return false;
         }
         float e = t * t * (3 - 2 * t);
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f - e);
-        pushed_alpha = true;
-    } else if (a.anim < 1.0f && !docked) {
+        /* no style push here: closing fades via per-vertex alpha scaling after
+           content (see frame loop) - a style push would double-fade the chrome */
+        a.fade_k = 1.0f - e;
+    } else if (a.anim < 1.0f) {   /* fade-in incl. docked: vertex scaling too */
         float t = (float)(now_double() - a.anim_t0) / 0.5f;
         if (t >= 1.0f) a.anim = 1.0f;
         else {
             a.anim = t;
             float e = t * t * (3 - 2 * t);
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, e);
-            pushed_alpha = true;
+            a.fade_k = e;
         }
     }
     if (g_win_move && g_focus == di && (g_nudge_dx || g_nudge_dy)) {
@@ -726,23 +776,24 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
             g_nudge_dx = g_nudge_dy = 0;
         }
     }
-    if (!pushed_alpha) {
+    {   /* default spawn pos/size, only honored on the very first Begin */
         ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
     }
     if (a.uncoll) { ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always); a.uncoll = false; }
-    if (a.collapse_req) { ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always); a.collapse_req = false; }
     char title[80];
     snprintf(title, sizeof title, "%s###dyn%d", a.name, di);
     bool p_keep = a.open && !a.closing;
     bool shown = ImGui::Begin(title, &p_keep);
     if (!p_keep && !a.closing) { a.open = true; a.closing = true; a.close_t0 = now_double(); }
-    if (pushed_alpha) ImGui::PopStyleVar();
     /* Begin returns FALSE for COLLAPSED (and clipped) windows - that is NOT
        a close request. Only p_keep==false (the X button) closes. This was
        the collapse-vanish bug: collapsed -> Begin false -> dyn_close. */
     a.collapsed = !ImGui_IsWindowDocked(title) && ImGui::IsWindowCollapsed();
-    if (!shown) { ImGui::End(); return false; }
+    if (!shown) {
+        ImGui::End();
+        return false;
+    }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = di;
     return true;
 }
@@ -1150,21 +1201,55 @@ void igui_build_ui(double t, float fps) {
         if (!shell_begin_dyn(di, ImVec2(60 + di * 30, 40 + di * 24), ImVec2(440, 320)))
             continue;
         a.frame(t);
-        if (a.closing) {
-            /* guaranteed content fade: scale EVERY vertex alpha in this
-               window's draw list (text+widgets included - style alpha alone
-               does not reach plugin content) */
-            float e = (float)(now_double() - a.close_t0) / 0.5f;
-            if (e > 1) e = 1;
-            float k = 1.0f - (e * e * (3 - 2 * e));
-            ImDrawList *dl = ImGui::GetWindowDrawList();
+        shell_end_dyn();
+        /* UNIFIED fade: one mechanism for open/close/minimize/restore - scale
+           every vertex alpha of this window's own draw list (chrome + widgets
+           + raw IM_COL32 plugin draws). Group members are skipped here: their
+           content lives in the host's list, scaled once by the block below. */
+        if (a.fade_k < 1.0f) {
+            extern int ImGui_WindowDockNodeId(const char *);
+            char tn[80];
+            snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
+            if (ImGui_WindowDockNodeId(tn) == 0) {
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                for (int v = 0; v < dl->VtxBuffer.Size; v++) {
+                    unsigned c = dl->VtxBuffer[v].col;
+                    unsigned al = (unsigned)(((c >> 24) & 0xFF) * a.fade_k);
+                    dl->VtxBuffer[v].col = (c & 0x00FFFFFF) | (al << 24);
+                }
+            }
+        }
+    }
+
+    {   /* group HOST chrome (tab strip + frame) is recorded during NewFrame's
+           DockNodeUpdate - before any style push, so style alpha never fades it.
+           Scale the host draw list vertices by the members' fade factor. */
+        extern void *ImGui_DockNodeHostDrawList(int node_id);
+        extern int ImGui_WindowDockNodeId(const char *);
+        int done_nid[8]; int nd = 0;
+        for (int di = 0; di < g_dyn_n; di++) {
+            DynApp &a = g_dyn[di];
+            if (!a.open || a.closing) continue;
+            if (!a.mfade && a.anim < 1.0f) { /* fading in: scale chrome */ }
+            else if (!a.fade_end) continue;   /* mini + fade_end still scales */
+            if (a.fade_k >= 1.0f) continue;
+            char tn[80];
+            snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
+            int nid = ImGui_WindowDockNodeId(tn);
+            if (!nid) continue;
+            bool dup = false;
+            for (int q = 0; q < nd; q++) if (done_nid[q] == nid) dup = true;
+            if (dup || nd >= 8) continue;
+            ImDrawList *dl = (ImDrawList *)ImGui_DockNodeHostDrawList(nid);
+            if (!dl) continue;
+            done_nid[nd++] = nid;
+            a.fade_end = false;
             for (int v = 0; v < dl->VtxBuffer.Size; v++) {
                 unsigned c = dl->VtxBuffer[v].col;
-                unsigned al = (unsigned)(((c >> 24) & 0xFF) * k);
+                unsigned al = (unsigned)(((c >> 24) & 0xFF) * a.fade_k);
                 dl->VtxBuffer[v].col = (c & 0x00FFFFFF) | (al << 24);
             }
         }
-        shell_end_dyn();
     }
 }
 

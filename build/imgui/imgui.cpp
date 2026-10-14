@@ -1403,9 +1403,30 @@ extern "C" void ImGui_SetWindowFocusByName(const char* name)
 }
 extern "C" int ImGui_WindowDockNodeId(const char* name)
 {
+    // Return DockId (not DockNode->ID): a group-minimized window is unbound from
+    // its node but KEEPS the DockId reference, and the taskbar must still group it.
     ImGuiWindow* w = FindWindowByName(name);
-    if (w == NULL || w->DockNode == NULL) return 0;
-    return (int)w->DockNode->ID;
+    if (w == NULL) return 0;
+    return (int)w->DockId;
+}
+// IMRUN: minimize-to-taskbar of a docked group member. Removes the window from
+// its dock node while KEEPING the persistent DockId, so the node (group) dies
+// natively when its last member leaves (CountNodeWithWindows==0 hides the host),
+// and the window re-docks into the same group when submitted again.
+extern "C" void ImGui_UndockWindowKeepRef(const char* name)
+{
+    ImGuiWindow* w = FindWindowByName(name);
+    if (w == NULL || w->DockNode == NULL) return;
+    DockContextProcessUndockWindow(GImGui, w, false);
+}
+// IMRUN: draw list of a dock group's HOST window (title bar / tab strip). The
+// host chrome is recorded during NewFrame (DockNodeUpdate), BEFORE any user
+// style push - so fading it requires vertex-alpha scaling from the shell.
+extern "C" void* ImGui_DockNodeHostDrawList(int node_id)
+{
+    ImGuiDockNode* node = DockContextFindNodeByID(GImGui, (ImGuiID)node_id);
+    if (node == NULL || node->HostWindow == NULL) return NULL;
+    return node->HostWindow->DrawList;
 }
 extern "C" bool ImGui_GetWindowPosByName(const char* name, float* x, float* y)
 {

@@ -446,3 +446,40 @@
 - **合并组"点最小化没反应"真凶**：dock 节点由成员窗口的 Begin 提交渲染，对停靠成员置 mini 并跳过 Begin → 节点标签栏仍在原地画 → 视觉上什么都没发生
 - **重做**：dyn_minimize 分流——浮动窗口 = 淡出隐藏（mini）；**停靠成员 = 原生折叠**（collapse_req → SetNextWindowCollapsed(true) → 合并窗缩成标签条，可见、可点、可恢复）。恢复 = dyn_focus 的 uncoll 展开
 - 任务栏"隐藏"判定统一为 mini || collapsed；折叠的组 chip 变暗、点击展开
+
+## IMRUN v0.4.27（2026-10-15，组最小化终极修复：keep-ref 解停靠）
+- 二进制 md5: 68f2b29f88f9ad5d174dd02ed58ac394（/home/user/imrun/imrun）
+- **前 5 轮修复全部无效的结构性原因**（读 ImGui 源码确认）：
+  1. `imgui.cpp:8211` Begin 每帧强制 docked 窗口 `Collapsed=false` → SetNextWindowCollapsed 对 docked 成员是**空操作**（v0.4.26 折叠方案原理上不可能生效）
+  2. dock host 窗口创建带 `NoCollapse|NoTitleBar`（19269 行）→ host 也不能折叠
+  3. 单纯置 mini 跳过 Begin：成员仍在 `node->Windows` 里（DockNodeFindInfo 按 Windows.Size 计数），host 照常渲染
+- **正解（用户定的语义：合并组=一个新窗口，最小化=收缩到任务栏，非折叠）**：新增核心导出 `ImGui_UndockWindowKeepRef(name)` = 原生 `DockContextProcessUndockWindow(clear_persistent_docking_ref=false)`——成员离开节点但**保留 DockId**；最后一个成员离开时 `CountNodeWithWindows==0` 触发原生路径（19142 行）自动隐藏整个组 host（节点保留，18816 行不触发删除）。恢复=成员带 DockId 重新 Begin → BeginDocked 自动重绑回原节点，标签栏+选中标签原样恢复——与"关闭全部再重开"同一条原生路径，零特例
+- dyn_minimize：点任意成员 → 找出同节点全部成员一起 0.5s 淡出，结束时各自 keep-ref 离开；HOME（minimize_all）同步处理
+- 顺带修暗伤：mfade 此前只有标记从未有实现（没有淡出代码、没有置 mini 的收尾）——补全
+- `ImGui_WindowDockNodeId` 改返回 `w->DockId`：最小化期间任务栏 chip 依然按组聚合不散架
+
+## IMRUN v0.4.28（2026-10-15，淡入淡出覆盖内容：样式 alpha 横跨整帧）
+- 二进制 md5: 33bb52feea7250e976ebc6cd749a549b
+- **"只有窗口骨架在淡、里面文字控件不淡"的根因**：PushStyleVar(Alpha) 在 Begin 前压栈、PopStyleVar 在 Begin 刚返回就弹掉——内容在其后才画，全程 alpha=1
+- 修法：样式 alpha 横跨 Begin..End（fade_span，内容画完才 pop）；恢复淡入去掉 `&& !docked` 断裂条件；关闭淡出去掉骨架双重淡
+
+## IMRUN v0.4.29（2026-10-15，组标题栏（host 铬件）淡入淡出）
+- 二进制 md5: 31c48dd0730df476b6cec2e53230b3c1
+- **组标签条不淡的结构性原因**：host 铬件在 NewFrame 阶段 DockNodeUpdate 里记录（18099 行），早于任何样式压栈——样式 alpha 永远罩不住
+- 修法：核心导出 `ImGui_DockNodeHostDrawList(node_id)`；每成员带当帧系数 fade_k，帧末对组 host drawlist 逐顶点缩放（组内去重，只乘一次）
+
+## IMRUN v0.4.30（2026-10-15，组最小化结尾闪一帧）
+- 二进制 md5: 39e96e0b6503963077d20993c44a1e71
+- **闪现根因**：淡出结束那一帧，成员在 shell 循环里才解除 dock，而该帧组骨架已在 NewFrame 按全亮度记录完；此刻全员 fade_k=1/已 mini，后处理不再缩放 → 组骨架以 100% 亮度单独亮一帧，下一帧节点才空
+- 修法：收尾帧置 fade_k=0 + fade_end 标记，后处理把 host 顶点乘 0——淡到 0 干净消失
+
+## IMRUN v0.4.31（2026-10-15，四动画统一为单一顶点缩放机制）
+- 二进制 md5: d5a8539301c2eb62337c247852135b26
+- **普通窗口关闭特效"不太对"的根因**：关闭走逐顶点缩放、开/最小化/恢复走样式 alpha 横跨——两套机制行为不一致；且插件大量使用原始 IM_COL32 drawlist 绘制（图标/示波器），样式 alpha 根本罩不住（只有 GetColorU32 路径乘 g.Style.Alpha）
+- **统一**：四个动画全部改为**每帧对窗口自身 drawlist 逐顶点乘 fade_k**（chrome+控件+原始绘制全覆盖）；组成员跳过自身缩放（其内容在 host list 里，由 host 块按组缩放一次）；删除样式压栈/fade_span 机制及 closing 专用顶点块——一条路径，无特例
+
+### 构建坑记录（本轮踩过，复用必读）
+1. **WSL /tmp 与 Git Bash /tmp 不互通**：不能在 Windows 侧写文件再让 WSL 按路径读。正确姿势：`wsl -e bash -c "$(cat job.sh)" < srcs.b64`——脚本经 -c 传入，数据走 stdin（若 `cat job.sh srcs.b64 | bash -s` 会把 base64 当命令执行）
+2. **`__dso_handle` 链接失败**（-nostartfiles 丢 crtbegin）：gldemo_imgui.c 的 shim 必须加 `__attribute__((visibility("hidden")))`，否则 gcc-cross 11 报 "hidden symbol isn't defined"
+3. **设备 /tmp 放不下二进制**（sftp put 报 size mismatch）：传 /home/user/ 再 mv
+4. **设备 SSH 只认 ssh-rsa**：OpenSSH 新版需 -oHostKeyAlgorithms=+ssh-rsa；推荐直接用 run_demo.py 的 paramiko 模式（root/123456）；nohup 启动命令会让 exec_command 通道超时，分开确认 pidof 即可

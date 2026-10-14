@@ -22,7 +22,7 @@ __asm__(".global _start\n"
 #include <stdarg.h>
 /* gcc11 headers redirect sscanf -> __isoc99_sscanf; old sysroot glibc 2.5
    has no such symbol — forward it ourselves */
-void *__dso_handle = (void *)&__dso_handle; /* -nostartfiles: no crtbegin */
+__attribute__((visibility("hidden"))) void *__dso_handle = (void *)&__dso_handle; /* -nostartfiles: no crtbegin */
 
 typedef int (*vsscanf_fn)(const char *, const char *, va_list);
 static vsscanf_fn real_vsscanf;
