@@ -5587,67 +5587,6 @@ void ImGui::UpdateMouseMovingWindowEndFrame()
         }
     }
 
-    // IMRUN patch #3 (v3): Android-style touch scrolling.
-    //  - press+drag tracks content 1:1 (near-instant follow, no lag)
-    //  - release flings with velocity + friction decay
-    //  - touch-slop hijack: a drag >12px over ANY widget becomes a scroll
-    //    (cancels the widget press, like Android)
-    {
-        static ImGuiWindow* dsw[4] = {};
-        static float dtgt[4], dvel[4] = {};
-        static bool ddrag[4];
-        ImGuiWindow* sw = g.HoveredWindow;
-
-        // touch-slop hijack: dragging beyond 12px cancels a widget press
-        if (g.IO.MouseDown[0] && g.ActiveId != 0 && g.ActiveIdWindow != NULL &&
-            sw != NULL && sw->ScrollMax.y > 0.0f &&
-            g.ActiveIdWindow->RootWindowDockTree == sw->RootWindowDockTree)
-        {
-            float dx = g.IO.MousePos.x - g.IO.MouseClickedPos[0].x;
-            float dy = g.IO.MousePos.y - g.IO.MouseClickedPos[0].y;
-            if (dx * dx + dy * dy > 12 * 12)
-                ClearActiveID();
-        }
-
-        if (sw != NULL && g.IO.MouseDown[0] && g.MovingWindow == NULL &&
-            (g.ActiveId == 0 || g.ActiveId == sw->RootWindow->MoveId) &&
-            sw->ScrollMax.y > 0.0f)
-        {
-            int slot = -1;
-            for (int q = 0; q < 4; q++) if (dsw[q] == sw) slot = q;
-            if (slot < 0) {
-                for (int q = 0; q < 4; q++) if (!dsw[q]) { slot = q; break; }
-                if (slot < 0) slot = 0;
-                dsw[slot] = sw; dtgt[slot] = sw->Scroll.y;
-                dvel[slot] = 0; ddrag[slot] = false;
-            }
-            if (!ddrag[slot]) { ddrag[slot] = true; dtgt[slot] = sw->Scroll.y; dvel[slot] = 0; }
-            if (g.IO.MouseDelta.y != 0.0f) {
-                dtgt[slot] = ImClamp(dtgt[slot] - g.IO.MouseDelta.y, 0.0f, sw->ScrollMax.y);
-                dvel[slot] = dvel[slot] * 0.6f - g.IO.MouseDelta.y * 0.4f * 50.0f;
-            }
-        }
-        else {
-            for (int q = 0; q < 4; q++) if (dsw[q]) ddrag[q] = false;
-        }
-        for (int q = 0; q < 4; q++)
-        {
-            ImGuiWindow* w = dsw[q];
-            if (!w || w->LastFrameActive < g.FrameCount - 1) { dsw[q] = NULL; continue; }
-            if (!ddrag[q]) {
-                dtgt[q] += dvel[q] * 0.02f;          // fling integration
-                dvel[q] *= 0.93f;                     // friction
-                if (dvel[q] > -1.0f && dvel[q] < 1.0f) dvel[q] = 0;
-                dtgt[q] = ImClamp(dtgt[q], 0.0f, w->ScrollMax.y);
-            }
-            float diff = dtgt[q] - w->Scroll.y;
-            if (diff > 0.5f || diff < -0.5f)
-                w->Scroll.y += diff * (ddrag[q] ? 0.55f : 0.30f);
-            else if (!ddrag[q])
-                dtgt[q] = w->Scroll.y;
-        }
-    }
-
     // With right mouse button we close popups without changing focus based on where the mouse is aimed
     // Instead, focus will be restored to the window under the bottom-most closed popup.
     // (The left mouse button path calls FocusWindow on the hovered window, which will lead NewFrame->ClosePopupsOverWindow to trigger)
