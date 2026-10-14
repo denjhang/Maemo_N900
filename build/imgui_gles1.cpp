@@ -92,6 +92,7 @@ static void upload_texture(ImTextureData *tex) {
 }
 
 void imrun_minimize_by_title(const char *title);
+extern void alog_public(const char *fmt, ...);
 extern int ImGui_OpenPopupCount(void);   /* patched-core BACK support */
 extern int igui_desk_nav_index(void);
 extern void ImGui_CloseTopPopup(void);
@@ -274,6 +275,48 @@ static bool g_desk_edit = false;
 static int g_desk_nav_sel = -1;
 static bool g_desk_nav_on = false;  /* only show highlight after a keypress */
 static int g_desk_last = -1;   /* last-clicked tile: ring persists */
+/* ---- app ordering: system apps DEFAULT to top-left, user may move them.
+   Order is kept BY ID (survives uninstall/reinstall); no forced re-pinning. */
+static int g_order[8];
+static int g_order_n = 0;
+static char g_order_id[8][40];
+static void order_sync(void) {
+    int n = 0;
+    for (int q = 0; q < 8 && g_order_id[q][0]; q++) {
+        for (int i = 0; i < g_dyn_n; i++) {
+            if (strcmp(g_dyn[i].id, g_order_id[q]) == 0) {
+                bool dup = false;
+                for (int k = 0; k < n; k++) if (g_order[k] == i) dup = true;
+                if (!dup) g_order[n++] = i;
+                break;
+            }
+        }
+    }
+    if (n == 0) {
+        /* first boot default: system apps top-left, then scan order */
+        for (int i = 0; i < g_dyn_n && n < 8; i++)
+            if (g_dyn[i].sys) g_order[n++] = i;
+    }
+    for (int i = 0; i < g_dyn_n && n < 8; i++) {
+        bool dup = false;
+        for (int k = 0; k < n; k++) if (g_order[k] == i) dup = true;
+        if (!dup) g_order[n++] = i;
+    }
+    g_order_n = n;
+    for (int q = 0; q < n; q++)
+        snprintf(g_order_id[q], 40, "%s", g_dyn[g_order[q]].id);
+}
+static void order_swap(int a, int b) {
+    if (a < 0 || b < 0 || a >= g_order_n || b >= g_order_n) return;
+    int t = g_order[a];
+    g_order[a] = g_order[b];
+    g_order[b] = t;
+    snprintf(g_order_id[a], 40, "%s", g_dyn[t].id);
+    snprintf(g_order_id[b], 40, "%s", g_dyn[g_order[a]].id);
+}
+/* animated tile display positions (-1 = snap on first frame) */
+static float g_tile_x[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+static float g_tile_y[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
 bool g_ctrl_down = false;
 static bool g_win_move = false;
 static float g_nudge_dx = 0, g_nudge_dy = 0;
@@ -404,8 +447,11 @@ static void settings_save(void) {
     fprintf(f, "wall_mode=%d\nwall_variant=%d\na_win=%.2f\na_bar=%.2f\na_desk=%.2f\ndock_cover=%d\n",
             g_wall_mode, g_wall_variant, g_a_win, g_a_bar, g_a_desk,
             g_dock_covers_sysbar ? 1 : 0);
+    for (int q = 0; q < g_order_n; q++)
+        fprintf(f, "ord=%s\n", g_dyn[g_order[q]].id);
     fclose(f);
 }
+extern "C" void imrun_settings_touch(void) { settings_save(); }  /* order swap hook */
 static void settings_load(void) {
     FILE *f = fopen("/home/user/imrun_settings.ini", "r");
     if (!f) return;
@@ -418,6 +464,11 @@ static void settings_load(void) {
         else if (sscanf(line, "a_bar=%f", &v) == 1) g_a_bar = v;
         else if (sscanf(line, "a_desk=%f", &v) == 1) g_a_desk = v;
         else if (sscanf(line, "dock_cover=%d", &iv) == 1) g_dock_covers_sysbar = iv > 0;
+        else if (strncmp(line, "ord=", 4) == 0) {
+            char idv[40];
+            if (sscanf(line + 4, "%39s", idv) == 1 && g_order_n < 8)
+                snprintf(g_order_id[g_order_n++], 40, "%s", idv);
+        }
     }
     fclose(f);
 }
@@ -640,6 +691,18 @@ void igui_build_ui(double t, float fps) {
     (void)fps;
     static bool s_loaded = false;
     if (!s_loaded) { s_loaded = true; settings_load(); }
+    {   /* boot order: diag-heavy until proven */
+        static bool s_ord_dbg = false;
+        if (!s_ord_dbg && g_dyn_n > 0) {
+            s_ord_dbg = true;
+            alog_public("BOOTORDER order_n=%d dyn_n=%d", g_order_n, g_dyn_n);
+        }
+        if (g_order_n == 0 && g_dyn_n > 0) {
+            order_sync();
+            alog_public("BOOTORDER syncing+saving");
+            settings_save();
+        }
+    }
     {   /* autosave ONLY when a setting actually changed (periodic writes
            caused the ~1s stutter: flash write in the UI thread) */
         static int s_last_sig = -999999;
@@ -647,11 +710,16 @@ void igui_build_ui(double t, float fps) {
                 + (int)(g_a_win * 131) + (int)(g_a_bar * 197) + (int)(g_a_desk * 251)
                 + (g_dock_covers_sysbar ? 10000 : 0);
         if (sig != s_last_sig) {
-            if (s_last_sig != -999999) settings_save();
+            settings_save();   /* incl. first frame: write defaults once */
             s_last_sig = sig;
         }
     }
-    if (++g_dyn_scan_cnt >= 120) { g_dyn_scan_cnt = 0; dyn_scan(); }
+    if (++g_dyn_scan_cnt >= 120) {
+        int before = g_dyn_n;
+        g_dyn_scan_cnt = 0;
+        dyn_scan();
+        if (g_dyn_n != before) order_sync();
+    }
 
     {
         float dh = g_dock_covers_sysbar ? 480.0f : (480.0f - SYSBAR_H);
@@ -696,9 +764,20 @@ void igui_build_ui(double t, float fps) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(1, 1, 1, 0.08f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(1, 1, 1, 0.16f));
         const int cols = 4, cellw = 190, cellh = 118;
-        for (int i = 0; i < g_dyn_n; i++) {
-            int col = i % cols, row = i / cols;
-            float bx = 14 + col * cellw, by = 12 + row * cellh;
+        static int drag_pos = -1;   /* edit mode: tile being dragged */
+        for (int pos = 0; pos < g_order_n; pos++) {
+            int i = g_order[pos];
+            int col = pos % cols, row = pos / cols;
+            float tx = 14 + col * cellw, ty = 12 + row * cellh;
+            /* animated display position (snap on first appearance) */
+            if (g_tile_x[i] < 0 || g_tile_y[i] < 0) { g_tile_x[i] = tx; g_tile_y[i] = ty; }
+            g_tile_x[i] += (tx - g_tile_x[i]) * 0.28f;
+            g_tile_y[i] += (ty - g_tile_y[i]) * 0.28f;
+            float bx = g_tile_x[i], by = g_tile_y[i];
+            if (g_desk_edit && drag_pos == pos) {  /* dragged tile follows finger */
+                bx = ImGui::GetIO().MousePos.x - (cellw - 14) * 0.5f - ImGui::GetWindowPos().x;
+                by = ImGui::GetIO().MousePos.y - (cellh - 12) * 0.5f - ImGui::GetWindowPos().y;
+            }
             ImGui::SetCursorPos(ImVec2(bx, by));
             char hid[16];
             snprintf(hid, sizeof hid, "##desk%d", i);
@@ -706,15 +785,26 @@ void igui_build_ui(double t, float fps) {
             static double hold_t0[16] = {0};
             if (ImGui::InvisibleButton(hid, ImVec2(cellw - 14, cellh - 12))) {
                 if (g_desk_edit) {
-                    if (!g_dyn[i].sys) {
+                    /* released a drag: drop on nearest slot -> swap */
+                    if (drag_pos >= 0 && drag_pos != pos) {
+                        order_swap(drag_pos, pos);
+                        extern void imrun_settings_touch(void);
+                        imrun_settings_touch();
+                        imrun_vibra_ping(50);
+                    }
+                    drag_pos = -1;
+                    if (!g_dyn[i].sys) {   /* plain tap (no drag) near X = uninstall */
                         ImVec2 mp = ImGui::GetIO().MousePos;
-                        float cx = bx + cellw - 26, cy = by + 6;
-                        if ((mp.x-cx)*(mp.x-cx)+(mp.y-cy)*(mp.y-cy) < 256) {
+                        float cx = g_tile_x[i] + cellw - 26, cy = g_tile_y[i] + 6;
+                        if ((mp.x-ImGui::GetWindowPos().x-cx)*(mp.x-ImGui::GetWindowPos().x-cx)+
+                            (mp.y-ImGui::GetWindowPos().y-cy)*(mp.y-ImGui::GetWindowPos().y-cy) < 256) {
                             g_dyn_dead = i; imrun_vibra_ping(120);
                         }
                     }
                 } else { g_desk_last = i; dyn_focus(i); }
             }
+            if (g_desk_edit && ImGui::IsItemActive() && drag_pos < 0)
+                drag_pos = pos;   /* pick up tile */
             int hi = i < 16 ? i : 15;
             if (!g_desk_edit && ImGui::IsItemActive()) {
                 if (hold_t0[hi] == 0) hold_t0[hi] = t;

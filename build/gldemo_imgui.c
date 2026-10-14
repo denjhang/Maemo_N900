@@ -121,7 +121,6 @@ static void alog(const char *fmt, ...) {
         if (!alogf) return;
         setvbuf(alogf, NULL, _IONBF, 0); /* survive hangs: flush every line */
     }
-void alog_public(const char *fmt, ...) { alog("%s", fmt); }
     unsigned long ms = (unsigned long)((now() - alog_t0) * 1000.0);
     va_list ap;
     va_start(ap, fmt);
@@ -130,7 +129,20 @@ void alog_public(const char *fmt, ...) { alog("%s", fmt); }
     fputc('\n', alogf);
     va_end(ap);
 }
-void alog_public(const char *fmt, ...) { alog("%s", fmt); }
+void alog_public(const char *fmt, ...) {
+    if (!alogf) {
+        alogf = fopen("/home/user/audio_dbg.log", "a");
+        if (!alogf) return;
+        setvbuf(alogf, NULL, _IONBF, 0);
+    }
+    unsigned long ms = (unsigned long)((now() - alog_t0) * 1000.0);
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(alogf, "[%6lu.%03lu] ", ms / 1000, ms % 1000);
+    vfprintf(alogf, fmt, ap);
+    fputc('\n', alogf);
+    va_end(ap);
+}
 static void *hPTHREAD;
 static int (*pthread_create_fn)(unsigned long *, void *, void *(*)(void *), void *);
 static int (*pthread_join_fn)(unsigned long, void **);
