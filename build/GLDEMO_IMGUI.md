@@ -398,3 +398,4 @@
 - **修复 order_sync 陈旧索引污染**：g_order 未清零，旧会话索引混入去重判断导致偶发图标消失——每次重建前置 -1
 - 宿主新增导出：imrun_ui_fontface/fontsize/scale（DISPLAY 页调用）
 - 桌面最终形态：SETTINGS + APPMGR + DEMO 三图标，商店含全部备份
+- **v0.4.19 补**：DEMO 六标签版本此前因部署命令链断裂未真正编译/部署（部署的仍是旧无标签版）——已重编译热替换并重启，六标签（HELLO/WIDGETS/TONEGEN/VIBRA/KEYS/FONTS）生效
