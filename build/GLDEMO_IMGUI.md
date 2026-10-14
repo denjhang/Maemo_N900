@@ -483,3 +483,8 @@
 2. **`__dso_handle` 链接失败**（-nostartfiles 丢 crtbegin）：gldemo_imgui.c 的 shim 必须加 `__attribute__((visibility("hidden")))`，否则 gcc-cross 11 报 "hidden symbol isn't defined"
 3. **设备 /tmp 放不下二进制**（sftp put 报 size mismatch）：传 /home/user/ 再 mv
 4. **设备 SSH 只认 ssh-rsa**：OpenSSH 新版需 -oHostKeyAlgorithms=+ssh-rsa；推荐直接用 run_demo.py 的 paramiko 模式（root/123456）；nohup 启动命令会让 exec_command 通道超时，分开确认 pidof 即可
+
+## IMRUN v0.4.32（2026-10-15，淡入淡出全部消失回归修复）
+- 二进制 md5: 9cccbcdf046faa9ac13c085d055cef8（/home/user/imrun/imrun）
+- **v0.4.31 回归根因**：统一顶点缩放时把缩放代码挪到了 `shell_end_dyn()`（End）**之后**——End 之后当前窗口已弹出栈，`GetWindowDrawList()` 返回的是**别的窗口**的 list，四个动画一次都没真正落到窗口上
+- 修法：缩放移回 `End()` 之前（窗口仍是当前窗口时取 list）。教训：顶点后处理必须在目标窗口的 Begin/End 区间内做

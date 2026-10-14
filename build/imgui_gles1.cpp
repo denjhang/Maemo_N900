@@ -1201,11 +1201,13 @@ void igui_build_ui(double t, float fps) {
         if (!shell_begin_dyn(di, ImVec2(60 + di * 30, 40 + di * 24), ImVec2(440, 320)))
             continue;
         a.frame(t);
-        shell_end_dyn();
         /* UNIFIED fade: one mechanism for open/close/minimize/restore - scale
            every vertex alpha of this window's own draw list (chrome + widgets
-           + raw IM_COL32 plugin draws). Group members are skipped here: their
-           content lives in the host's list, scaled once by the block below. */
+           + raw IM_COL32 plugin draws). MUST run BEFORE End(): after End the
+           current window is gone and GetWindowDrawList() returns the WRONG
+           list (v0.4.31 regression: fades silently applied elsewhere).
+           Group members are skipped here: their content lives in the host's
+           list, scaled once by the block below. */
         if (a.fade_k < 1.0f) {
             extern int ImGui_WindowDockNodeId(const char *);
             char tn[80];
@@ -1219,6 +1221,7 @@ void igui_build_ui(double t, float fps) {
                 }
             }
         }
+        shell_end_dyn();
     }
 
     {   /* group HOST chrome (tab strip + frame) is recorded during NewFrame's
