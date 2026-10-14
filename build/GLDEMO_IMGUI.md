@@ -493,3 +493,8 @@
 - 二进制 md5: ac9da0678afd38c9c7fb59a8ab9c2101（/home/user/imrun/imrun）
 - **根因**：v0.4.27 把 ImGui_WindowDockNodeId 改为返回 w->DockId，而 DockId 在解除停靠后**依然保留**（这正是恢复分组的持久引用）——浮动缩放块用 `WindowDockNodeId==0` 判"不在组里"，对**曾经停靠过的窗口永远不成立**：自身块跳过、host 块又拿不到 host（已解散），两头落空 → 只要进过一次组，之后单独窗口动画全失效
 - 修法：DynApp 增加 `docked_now`（每帧 Begin 前的 IsWindowDocked 实测值），作为"内容在 host list 里"的**唯一判据**；自身块和 host 块都用它分流。教训：DockId 表达"曾经/将来的组关系"，DockIsActive 才表达"此刻渲染在哪"
+
+## IMRUN v0.4.34（2026-10-15，组淡出中途铬件缩放丢失）
+- 二进制 md5: 428dfb30cb75879bf8f2e0fbeb5db78f（/home/user/imrun/imrun）
+- **根因**（v0.4.31 重构引入的 host 块判定错误）：`if (!a.mfade && a.anim<1) {} else if (!a.fade_end) continue;` —— 正在 mfade 淡出的成员掉进 else 且 fade_end=false → **整个淡出期间组铬件从未被缩放**，直到收尾帧才从全亮度骤降 0（切选中标签后视觉上=丢动画/瞬间消失）
+- 修法：host 块条件简化为语义本来的样子——`fade_k<1`（中途任意淡入淡出）或 `fade_end`（收尾帧压 0）即缩放；配合 docked_now 分流。教训：嵌套 if/else 修饰条件时，先把真值表列出来

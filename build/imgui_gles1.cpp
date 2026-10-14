@@ -1236,9 +1236,10 @@ void igui_build_ui(double t, float fps) {
         for (int di = 0; di < g_dyn_n; di++) {
             DynApp &a = g_dyn[di];
             if (!a.open || a.closing) continue;
-            if (!a.mfade && a.anim < 1.0f) { /* fading in: scale chrome */ }
-            else if (!a.fade_end) continue;   /* mini + fade_end still scales */
-            if (a.fade_k >= 1.0f) continue;
+            /* scale while ANY fade is in flight (fade_k<1: mid fade-in OR
+               mid minimize-fade-out) or on the fade_end frame (fade_k=0:
+               chrome was recorded at full alpha in NewFrame - kill it) */
+            if (a.fade_k >= 1.0f && !a.fade_end) continue;
             if (!a.docked_now) continue;   /* undocked: content is in own list,
                                               handled above - DockId may still
                                               be set (persistent ref) */
