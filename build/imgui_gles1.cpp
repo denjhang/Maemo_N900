@@ -34,6 +34,7 @@ typedef struct {
     void (*GetErrorFn)(void);
 } IGlfns;
 
+extern "C" void (*pglDeleteTextures)(unsigned, const unsigned *);   /* gldemo dlsym's it */
 static IGlfns gl;
 static ImFont *g_fonts[4];
 static ImFont *g_cnfont;
@@ -67,8 +68,11 @@ static unsigned fontTex = 0;
 #define GL_CLAMP_TO_EDGE   0x812F
 
 static void upload_texture(ImTextureData *tex) {
-    unsigned id = 0;
-    gl.GenTextures(1, &id);
+    unsigned id = (unsigned)(intptr_t)tex->TexID;
+    if (id == 0) {
+        gl.GenTextures(1, &id);
+        tex->SetTexID((ImTextureID)(intptr_t)id);
+    }
     gl.BindTexture(GL_TEXTURE_2D, id);
     gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -245,6 +249,7 @@ struct DynApp {
     void (*destroy)(void);
     void (*icon)(void *dl, float cx, float cy, float s);
     int (*sys)(void);
+    bool destroyed;
     bool open, mini, ever, cascade, closing;
     bool collapsed, uncoll;          /* native fold = third state */
     float anim; double anim_t0, close_t0;
@@ -314,8 +319,8 @@ static void order_swap(int a, int b) {
     int t = g_order[a];
     g_order[a] = g_order[b];
     g_order[b] = t;
-    snprintf(g_order_id[a], 40, "%s", g_dyn[t].id);
-    snprintf(g_order_id[b], 40, "%s", g_dyn[g_order[a]].id);
+    snprintf(g_order_id[a], 40, "%s", g_dyn[g_order[a]].id);
+    snprintf(g_order_id[b], 40, "%s", g_dyn[g_order[b]].id);
 }
 /* animated tile display positions (-1 = snap on first frame) */
 static float g_tile_x[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
@@ -330,6 +335,8 @@ static void dyn_focus(int di) {
     if (di < 0 || di >= g_dyn_n) return;
     DynApp &a = g_dyn[di];
     if (!a.ever) { a.cascade = true; a.ever = true; }
+    if (a.closing) a.closing = false;   /* reopen during fade = cancel */
+    if (a.destroyed && a.init) { a.init(); a.destroyed = false; }  /* fresh start */
     a.open = true; a.mini = false;
     a.uncoll = true;                 /* opening/focusing always expands */
     a.anim = 0; a.anim_t0 = now_double();
@@ -506,7 +513,7 @@ static void dyn_scan(void) {
         a.destroy = (void (*)(void))dlsym(h, "imapp_destroy");
         a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
         a.sys = (int (*)(void))dlsym(h, "imapp_system");
-        a.open = a.mini = a.ever = a.cascade = a.closing = false;
+        a.open = a.mini = a.ever = a.cascade = a.closing = a.destroyed = false;
         a.collapsed = a.uncoll = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
@@ -547,8 +554,11 @@ void igui_render(void) {
         if (tex->Status == ImTextureStatus_WantCreate ||
             tex->Status == ImTextureStatus_WantUpdates)
             upload_texture(tex);
-        else if (tex->Status == ImTextureStatus_WantDestroy)
+        else if (tex->Status == ImTextureStatus_WantDestroy) {
+            unsigned did = (unsigned)(intptr_t)tex->TexID;
+            if (did && pglDeleteTextures) pglDeleteTextures(1, &did);
             tex->SetStatus(ImTextureStatus_Destroyed);
+        }
     }
     ImDrawData *dd = ImGui::GetDrawData();
     if (!dd) return;
@@ -564,7 +574,6 @@ void igui_render(void) {
     gl.Orthof(0, fbw, fbh, 0, -1, 1);
     gl.MatrixMode(GL_MODELVIEW_M);
     gl.LoadIdentity();
-    gl.BindTexture(GL_TEXTURE_2D, fontTex);
     for (int n = 0; n < dd->CmdListsCount; n++) {
         const ImDrawList *cmdl = dd->CmdLists[n];
         const ImDrawVert *vtx = cmdl->VtxBuffer.Data;
@@ -579,6 +588,8 @@ void igui_render(void) {
         for (int ci = 0; ci < cmdl->CmdBuffer.Size; ci++) {
             const ImDrawCmd *cmd = &cmdl->CmdBuffer[ci];
             if (cmd->UserCallback) continue;
+            unsigned ctid = (unsigned)(intptr_t)cmd->GetTexID();
+            if (ctid) gl.BindTexture(GL_TEXTURE_2D, ctid);   /* per-cmd atlas */
             ImVec4 crs = cmd->ClipRect;
             if (crs.x < fbw && crs.y < fbh && crs.z > 0 && crs.w > 0) {
                 gl.Scissor((int)crs.x, (int)(fbh - crs.w),
@@ -633,7 +644,8 @@ extern "C" { extern int g_temp; }  /* defined in gldemo hw_thread */
 
 static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     DynApp &a = g_dyn[di];
-    if ((!a.open && !a.closing) || a.mini) return false;
+    if (a.closing) { /* handled below: fade+destroy even when mini */ }
+    else if (!a.open || a.mini) return false;
     bool pushed_alpha = false;
     if (a.cascade) {
         a.cascade = false;
@@ -662,7 +674,7 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
         float t = (float)(now_double() - a.close_t0) / 0.5f;
         if (t >= 1.0f) {
             a.open = false; a.closing = false; a.mini = false;
-            if (a.destroy) a.destroy();
+            if (a.destroy && !a.destroyed) { a.destroy(); a.destroyed = true; }
             /* DECOUPLED: closing an app never touches desktop/UI focus -
                the desktop keeps whatever state the user left it in */
             return false;
@@ -917,7 +929,7 @@ void igui_build_ui(double t, float fps) {
         int di = g_dyn_dead; g_dyn_dead = -1;
         DynApp &a = g_dyn[di];
         a.open = false;
-        if (a.destroy) a.destroy();
+        if (a.destroy && !a.destroyed) { a.destroy(); a.destroyed = true; }
         dlclose(a.h);
         /* REVERSIBLE uninstall: move to the local app repo, not rm -rf */
         char cmd[160];
@@ -928,6 +940,9 @@ void igui_build_ui(double t, float fps) {
         for (int k = di; k < g_dyn_n - 1; k++) g_dyn[k] = g_dyn[k + 1];
         g_dyn_n--;
         if (g_focus >= di) g_focus = -1;
+        g_desk_last = -1;
+        order_sync();      /* stale indices poisoned grid + saved order */
+        settings_save();
     }
     ImGui::End();
     ImGui::PopStyleColor();
@@ -1029,7 +1044,7 @@ void igui_build_ui(double t, float fps) {
             ImGui::PopStyleColor(4);
             ImGui::SameLine();
         }
-        char bat[8] = "--", tmp[8] = "--", clk[8] = "--:--";
+        char bat[12] = "--", tmp[8] = "--", clk[8] = "--:--";
         if (g_batt_pct >= 0) snprintf(bat, sizeof bat, "%d", g_batt_pct);
         if (g_temp >= 0) snprintf(tmp, sizeof tmp, "%d", g_temp);
         snprintf(clk, sizeof clk, "%s", shell_clock());
@@ -1038,8 +1053,9 @@ void igui_build_ui(double t, float fps) {
         float wy = ImGui::GetWindowPos().y;
         float ytxt = wy + 21 - fs * 0.5f, yc = wy + 21;
         ImVec2 tc = CalcTextSizeLocal(f, fs, clk);
+        if (g_batt_pct > 100) g_batt_pct = 100;
+        snprintf(bat, sizeof bat, "%d%%", g_batt_pct < 0 ? 0 : g_batt_pct);
         ImVec2 tb = CalcTextSizeLocal(f, fs, bat);
-        strcat(bat, "%"); tb = CalcTextSizeLocal(f, fs, bat);
         ImVec2 tt = CalcTextSizeLocal(f, fs, tmp);
         ImVec2 tC = CalcTextSizeLocal(f, fs, "C");
         const float GAP = 20.0f;

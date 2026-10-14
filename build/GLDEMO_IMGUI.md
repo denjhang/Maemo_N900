@@ -403,3 +403,16 @@
 ### v0.4.19 发布记录（2026-10-14）
 - 发布包: research/releases/imrun_release_v0.4.19.tar.gz
 - 统一插件架构成熟版：3 插件（SETTINGS 四页 / APPMGR / DEMO 六页）、单实例、设置持久化、可逆卸载、本地商店、黑匣子、7 个 ImGui 核心补丁全源
+
+## IMRUN v0.4.20（2026-10-14，全面代码体检——8 项硬伤修复）
+- 二进制 md5: def9d98860617c7ce1bca2bacabaf776（/home/user/imrun/imrun）
+- 双智能体并行审计（内存安全 + 状态机），修复清单：
+  - **【高】XNextEvent 栈越界写**：事件结构体比 XEvent 少 ~24B，每个触摸/按键事件都踩踏邻近栈——补齐 union 尾部（长驻随机崩溃的头号嫌疑）
+  - **【高】纹理内存持续泄漏**：WantUpdates 每次新建纹理覆盖 id；WantDestroy 从不删除——改为复用 id + 真正 glDeleteTextures；渲染按 cmd->GetTexID() 逐命令绑纹理（修多字体错纹理隐患）
+  - **【高】最小化后关闭=永久僵尸**：closing 置位后 shell_begin_dyn 因 mini 直接返回，淡出/destroy 永不执行——closing 分支优先于 mini 判断
+  - **【高】卸载后 g_order 悬垂索引**：桌面错位 + 持久化错 ID——压缩后 order_sync+settings_save
+  - **【高】order_swap 的 id 回写两边写反**——拖拽排序会被下次 sync 翻回去；按交换后数组回写
+  - **【中】淡出期间重开被吞**：dyn_focus 现在取消 closing（未 destroy 前取消安全）
+  - **【中】destroy/init 对称化**：新增 destroyed 标志——destroy 只调一次；重开先 init（杜绝 use-after-free 契约漏洞）；卸载路径守卫二次 destroy
+  - **【中】音频自然到期状态失真**：thread_run=1/audio_on=1 残留——break 前清零
+  - 【低】bat[8] 溢出（pct 钳位+snprintf）、vsscanf 空指针守卫、XGetVisualInfo 泄漏备查；跨线程 int 变量审查通过（g_wall_t double 撕裂可接受，250Hz 自愈）

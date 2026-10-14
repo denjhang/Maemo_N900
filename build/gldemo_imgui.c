@@ -30,6 +30,7 @@ int __isoc99_sscanf(const char *s, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     if (!real_vsscanf)
         *(void **)&real_vsscanf = dlsym(dlopen("libc.so.6", 1), "vsscanf");
+    if (!real_vsscanf) { va_end(ap); return 0; }   /* never deref NULL */
     int r = real_vsscanf(s, fmt, ap);
     va_end(ap);
     return r;
@@ -214,6 +215,7 @@ static unsigned (*peglGetError)(void);
 
 static void (*pglViewport)(int, int, int, int);
 static void (*pglClearColor)(float, float, float, float);
+void (*pglDeleteTextures)(unsigned, const unsigned *);
 static void (*pglClear)(unsigned);
 static void (*pglMatrixMode)(unsigned);
 static void (*pglLoadIdentity)(void);
@@ -398,6 +400,7 @@ static int load_syms(void) {
     DLSYM(hEGL, peglGetError, "eglGetError");
     DLSYM(hGLES, pglViewport, "glViewport");
     DLSYM(hGLES, pglClearColor, "glClearColor");
+    DLSYM(hGLES, pglDeleteTextures, "glDeleteTextures");
     DLSYM(hGLES, pglClear, "glClear");
     DLSYM(hGLES, pglMatrixMode, "glMatrixMode");
     DLSYM(hGLES, pglLoadIdentity, "glLoadIdentity");
@@ -712,8 +715,10 @@ static void *audio_writer(void *arg) {
     }
     while (thread_run) {
         double t_before = now();
-        if (audio_deadline && now() > audio_deadline)
+        if (audio_deadline && now() > audio_deadline) {
+            thread_run = 0; audio_on = 0;   /* truthful state for UI */
             break;
+        }
         for (unsigned i = 0; i < PERIOD; i++) {
             float ph = audio_phase / 6.2831853f; ph -= (float)(int)ph; /* 0..1 */
             float w;
@@ -1040,11 +1045,14 @@ int main(void) {
         /* pump X11 input -> ImGui */
         if (pXPending && pXNextEvent) {
             /* 32-bit Xlib event layout (core pointer events only) */
+            /* full XEvent is ~96B on 32-bit ARM - a partial struct let
+               XNextEvent overwrite ~24B of adjacent stack EVERY event */
             typedef struct {
                 int type; unsigned long serial, send_event, display;
                 unsigned long window, root, subwindow, time;
                 int x, y, x_root, y_root;
                 unsigned int state, button;
+                char pad[64];   /* union tail: full XEvent ~96B */
             } XPtrEvent;
             XPtrEvent ev;
             while (pXPending(xdpy)) {
