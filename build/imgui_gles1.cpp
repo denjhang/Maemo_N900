@@ -964,10 +964,20 @@ void igui_build_ui(double t, float fps) {
             if (!g_dyn[i].open) continue;
             bool foc = (g_focus == i && !g_dyn[i].mini);
             bool mini = g_dyn[i].mini;
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  g_dyn[i].collapsed ? vec4f(0.45f, 0.35f, 0.68f, 1)   /* folded: light purple */
-                                  : foc ? vec4f(0.16f, 0.42f, 0.60f, 1)
-                                      : vec4f(0.12f, 0.16f, 0.24f, mini ? 0.5f : 1));
+            {   /* state color with smooth transition (lerp toward target) */
+                static float chip_rgb[16][3];
+                float tgt[3];
+                if (g_dyn[i].collapsed) { tgt[0]=0.45f; tgt[1]=0.35f; tgt[2]=0.68f; }       /* folded: purple */
+                else if (foc)           { tgt[0]=0.16f; tgt[1]=0.42f; tgt[2]=0.60f; }       /* focus: blue */
+                else if (mini)          { tgt[0]=0.06f; tgt[1]=0.08f; tgt[2]=0.12f; }       /* min: dim */
+                else                    { tgt[0]=0.12f; tgt[1]=0.16f; tgt[2]=0.24f; }       /* normal: dark */
+                int cq = i < 16 ? i : 15;
+                for (int q = 0; q < 3; q++)
+                    chip_rgb[cq][q] += (tgt[q] - chip_rgb[cq][q]) * 0.12f;
+                float a = mini ? 0.5f : 1.0f;
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      vec4f(chip_rgb[cq][0], chip_rgb[cq][1], chip_rgb[cq][2], a));
+            }
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
             ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, mini ? 0.35f : 0.8f));

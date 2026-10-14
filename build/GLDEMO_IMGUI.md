@@ -372,3 +372,7 @@
 - **真凶（读代码实锤）**：ImGui 的 Begin() 对折叠窗口返回 false（SkipItems=true，官方语义=跳过内容仍需 End）——shell 把返回 false 当成了"用户点了关闭"，直接 dyn_close 销毁 → 折叠=消失；且 ini 记住 Collapsed=1 → 重开即折叠 → 再销毁 = "无法再次打开"
 - **修复**：Begin 返回 false ≠ 关闭。只有 p_keep==false（X 按钮）才走关闭流程；折叠态照常追踪（任务栏淡紫 chip）
 - 教训入档：Begin 返回值语义——false = 跳过内容（折叠/裁剪/最小化），≠ 窗口关闭
+
+## IMRUN v0.4.15（2026-10-14，任务栏状态色平滑渐变）
+- 二进制 md5: cdd1736741407d18ca6a5b217b04d34b（/home/user/imrun/imrun）
+- 任务栏 chip 状态色改为逐帧插值（12% 收敛）：聚焦蓝 / 折叠淡紫 / 最小化暗 / 常态深灰之间切换时颜色平滑过渡，不再瞬跳；按住绿色仍由 ButtonActive 即时呈现（按压反馈需要即时性）
