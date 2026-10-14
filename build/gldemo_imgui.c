@@ -136,6 +136,30 @@ static int (*pthread_create_fn)(unsigned long *, void *, void *(*)(void *), void
 static int (*pthread_join_fn)(unsigned long, void **);
 static int (*usleep_fn)(unsigned int);
 int g_temp = -1;   /* exported to shell sysbar (thread-fed) */
+double g_wall_t = 0;   /* wallpaper clock: fed by own thread, monotonic -
+                          UI stalls and wall-clock jumps can't touch it */
+static double mono_now(void) {
+    static int (*cgt)(int, void *);
+    if (!cgt) {
+        void *h = dlopen("librt.so.1", 1);
+        if (!h) h = dlopen("libc.so.6", 1);
+        if (h) *(void **)(&cgt) = dlsym(h, "clock_gettime");
+    }
+    if (cgt) {
+        struct { long sec, nsec; } ts;
+        if (cgt(1 /*CLOCK_MONOTONIC*/, &ts) == 0)
+            return (double)ts.sec + (double)ts.nsec / 1e9;
+    }
+    return now(); /* fallback */
+}
+static void *wall_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        g_wall_t = mono_now();
+        if (usleep_fn) usleep_fn(4000);   /* 250Hz: smooth, ~zero cost */
+    }
+    return NULL;
+}
 static void *hw_thread(void *arg) {
     (void)arg;
     void (*sam)(void) = (void (*)(void))arg;
@@ -936,8 +960,9 @@ int main(void) {
     if (pthread_create_fn) {
         unsigned long bt;
         pthread_create_fn(&bt, NULL, batt_reader, NULL);
-        unsigned long ht;
+        unsigned long ht, wt;
         pthread_create_fn(&ht, NULL, hw_thread, (void *)hw_sample);
+        pthread_create_fn(&wt, NULL, wall_thread, NULL);
     }
 
     /* AUTOTEST: reproduce rapid Play/Stop garbage, log everything, exit.
@@ -1066,6 +1091,14 @@ int main(void) {
             pXSync(xdpy, 0);
         }
         double el = (t = now()) - t0;
+        /* N900 has no RTC battery: the clock jumps (2009 firmware default ->
+           NTP 2026) while we run; el explodes and float precision freezes ALL
+           animation. Detect any jump > 1h (or backwards) and rebase. */
+        if (el > 3600.0 || el < 0) {
+            t0 = t;
+            el = 0;
+            alog("CLOCK jumped - animation time rebased");
+        }
         if (avtest && !av_started && el > 2.5) {
             audio_amp = 2500; /* quiet: don't disturb the human */
             audio_ui_start(20);
@@ -1081,7 +1114,8 @@ int main(void) {
         last = t;
         /* ---- wallpaper engine: 3D/2D x dynamic/static, 4 palettes ---- */
         {
-        float wel = (g_wall_mode == 1 || g_wall_mode == 3) ? 5.0f : el;
+        float wel = (g_wall_mode == 1 || g_wall_mode == 3) ? 5.0f
+                                                              : (float)g_wall_t;
         float hue = g_wall_variant * 0.23f;
         float r0 = 0.05f + 0.5f * hue, g0 = 0.06f + 0.35f * (1 - hue), b0 = 0.12f;
         pglDisable(GL_DEPTH_TEST);

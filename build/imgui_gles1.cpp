@@ -273,6 +273,7 @@ static char g_desk_filter[32] = "";
 static bool g_desk_edit = false;
 static int g_desk_nav_sel = -1;
 static bool g_desk_nav_on = false;  /* only show highlight after a keypress */
+static int g_desk_last = -1;   /* last-clicked tile: ring persists */
 bool g_ctrl_down = false;
 static bool g_win_move = false;
 static float g_nudge_dx = 0, g_nudge_dy = 0;
@@ -708,7 +709,7 @@ void igui_build_ui(double t, float fps) {
                             g_dyn_dead = i; imrun_vibra_ping(120);
                         }
                     }
-                } else dyn_focus(i);
+                } else { g_desk_last = i; dyn_focus(i); }
             }
             int hi = i < 16 ? i : 15;
             if (!g_desk_edit && ImGui::IsItemActive()) {
@@ -737,6 +738,10 @@ void igui_build_ui(double t, float fps) {
                             (on || (g_desk_filter[0] && fmatch)) ? IM_COL32(90, 200, 240, 240)
                                                                  : IM_COL32(255, 255, 255, 45),
                             10.0f, 0, hot ? 2.5f : 1.5f);
+            }
+            if (i == g_desk_last) { /* persistent last-click focus ring */
+                dl->AddRect(ImVec2(bx - 2, by - 2), ImVec2(bx + cellw - 12, by + cellh - 10),
+                            IM_COL32(120, 200, 255, 150), 11.0f, 0, 1.5f);
             }
             if (i == g_desk_nav_sel && g_desk_nav_on && !g_desk_edit)
                 dl->AddRect(ImVec2(bx - 3, by - 3), ImVec2(bx + cellw - 11, by + cellh - 9),
@@ -844,6 +849,16 @@ void igui_build_ui(double t, float fps) {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
             ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, mini ? 0.35f : 0.8f));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+            {   /* chip fades IN/OUT with its window */
+                float ca = 1.0f;
+                if (g_dyn[i].closing) {
+                    float ct = (float)(now_double() - g_dyn[i].close_t0) / 0.5f;
+                    ca = ct >= 1 ? 0 : 1 - ct * ct * (3 - 2 * ct);
+                } else if (g_dyn[i].anim < 1.0f) {
+                    ca = g_dyn[i].anim * g_dyn[i].anim * (3 - 2 * g_dyn[i].anim);
+                }
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ca);
+            }
             char tag[48];
             snprintf(tag, sizeof tag, "%s##run%d", g_dyn[i].name, i);
             static double chip_t0[16] = {0};
@@ -863,7 +878,7 @@ void igui_build_ui(double t, float fps) {
                     dyn_close(i);
                 }
             } else if (chip_t0[ci] > 0) chip_t0[ci] = 0;
-            ImGui::PopStyleVar();
+            ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(4);
             ImGui::SameLine();
         }

@@ -18,6 +18,14 @@ c = paramiko.SSHClient()
 c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 c.connect('192.168.101.108', username='root', password='123456',
           allow_agent=False, look_for_keys=False)
+# auto time-sync at connect: N900 has no RTC battery, clock resets to 2009
+import time as _t
+i, o, e = c.exec_command('date -s @%d; date' % int(_t.time()))
+o.channel.settimeout(15)
+try:
+    print('TIMESYNC:', o.read().decode().strip())
+except Exception:
+    pass
 s = c.open_sftp()
 s.put(binname, '/home/user/' + binname)
 s.chmod('/home/user/' + binname, 0o755)
