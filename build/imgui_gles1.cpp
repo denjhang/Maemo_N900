@@ -252,6 +252,7 @@ struct DynApp {
     bool destroyed;
     bool open, mini, ever, cascade, closing;
     bool collapsed, uncoll;          /* native fold = third state */
+    bool collapse_req;               /* docked minimize = native collapse */
     bool mfade; double mfade_t0;     /* minimize fade-out (0.5s) */
     float anim; double anim_t0, close_t0;
 };
@@ -352,14 +353,16 @@ static void dyn_focus(int di) {
     g_focus = di;
 }
 static void dyn_minimize(int di) {
-    /* minimize = 0.5s fade-out then hidden. For a DOCKED member this
-       removes its tab from the node; minimizing ALL members of a node
-       hides the merged window whole - ImGui remembers the dock layout
-       by node ID, restore is identical */
     if (di<0||di>=g_dyn_n) return;
     DynApp &a = g_dyn[di];
-    if (a.open && !a.mini && !a.closing && !a.mfade) {
-        a.mfade = true; a.mfade_t0 = now_double();
+    extern bool ImGui_IsWindowDocked(const char *);
+    char tn[80];
+    snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
+    if (a.open && !a.closing && !a.mfade) {
+        if (ImGui_IsWindowDocked(tn))
+            a.collapse_req = true;    /* docked: native collapse -> tab strip */
+        else
+            { a.mfade = true; a.mfade_t0 = now_double(); }  /* floating: fade out */
     }
     if (g_focus == di) g_focus = -1;
 }
@@ -728,6 +731,7 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
     }
     if (a.uncoll) { ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always); a.uncoll = false; }
+    if (a.collapse_req) { ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always); a.collapse_req = false; }
     char title[80];
     snprintf(title, sizeof title, "%s###dyn%d", a.name, di);
     bool p_keep = a.open && !a.closing;
@@ -1039,27 +1043,28 @@ void igui_build_ui(double t, float fps) {
             auto draw_chip = [&](int *mem, int n, int uid, int node_id) {
                 int sel = mem[0];
                 for (int q = 0; q < n; q++) if (mem[q] == g_focus) sel = g_focus;
-                bool all_mini = true;
-                for (int q = 0; q < n; q++) if (!g_dyn[mem[q]].mini) all_mini = false;
-                bool foc = (!all_mini && g_focus == sel);
+                bool all_hidden = true;
+                for (int q = 0; q < n; q++)
+                    if (!g_dyn[mem[q]].mini && !g_dyn[mem[q]].collapsed) all_hidden = false;
+                bool foc = (!all_hidden && g_focus == sel);
                 bool folded = (n == 1 && g_dyn[mem[0]].collapsed);
                 char label[72];
                 if (n > 1) snprintf(label, sizeof label, "%s+%d", g_dyn[sel].name, n - 1);
                 else snprintf(label, sizeof label, "%s", g_dyn[sel].name);
                 float tgt[3];
                 if (folded)      { tgt[0]=0.45f; tgt[1]=0.35f; tgt[2]=0.68f; }
-                else if (all_mini){ tgt[0]=0.06f; tgt[1]=0.08f; tgt[2]=0.12f; }
+                else if (all_hidden){ tgt[0]=0.06f; tgt[1]=0.08f; tgt[2]=0.12f; }
                 else if (foc)    { tgt[0]=0.16f; tgt[1]=0.42f; tgt[2]=0.60f; }
                 else             { tgt[0]=0.12f; tgt[1]=0.16f; tgt[2]=0.24f; }
                 int cq = uid < 16 ? uid : 15;
                 for (int q = 0; q < 3; q++)
                     chip_rgb[cq][q] += (tgt[q] - chip_rgb[cq][q]) * 0.12f;
-                float a = all_mini ? 0.5f : 1.0f;
+                float a = all_hidden ? 0.5f : 1.0f;
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       vec4f(chip_rgb[cq][0], chip_rgb[cq][1], chip_rgb[cq][2], a));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec4f(0.16f, 0.60f, 0.32f, 1));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec4f(0.20f, 0.30f, 0.42f, 1));
-                ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, all_mini ? 0.35f : 0.8f));
+                ImGui::PushStyleColor(ImGuiCol_Border, vec4f(0.45f, 0.55f, 0.68f, all_hidden ? 0.35f : 0.8f));
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
                 char tag[96];
                 snprintf(tag, sizeof tag, "%s##tb%d", label, uid);
@@ -1067,7 +1072,7 @@ void igui_build_ui(double t, float fps) {
                 int ci = cq;
                 if (ImGui::Button(tag, ImVec2(0, 42))) {
                     if (chip_t0[ci] != -1) {
-                        if (all_mini) {
+                        if (all_hidden) {
                             for (int q = 0; q < n; q++) dyn_focus(mem[q]);  /* restore all */
                             g_focus = sel;
                         }

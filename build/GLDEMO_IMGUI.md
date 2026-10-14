@@ -440,3 +440,9 @@
 - 二进制 md5: d7154673d6016f39728c3abeed096e3b（/home/user/imrun/imrun）
 - **结构性漏洞修复**：chip 分组循环此前跳过 mini 成员——最小化的窗口/组**chip 直接消失**，永远无法从任务栏恢复（"没法最小化"的真实含义是最小化即失联）
 - 重写为统一 chip 渲染器（lambda draw_chip）：**所有已打开窗口必有一个 chip**（最小化=暗色半透，点击即恢复）；组 chip 行为不变（点击聚焦/再点整组最小化/长按整组关闭）；状态色渐变保留
+
+## IMRUN v0.4.26（2026-10-14，组最小化重做：停靠组=原生折叠）
+- 二进制 md5: 35ea4d244439787574e65269148f744a（/home/user/imrun/imrun）
+- **合并组"点最小化没反应"真凶**：dock 节点由成员窗口的 Begin 提交渲染，对停靠成员置 mini 并跳过 Begin → 节点标签栏仍在原地画 → 视觉上什么都没发生
+- **重做**：dyn_minimize 分流——浮动窗口 = 淡出隐藏（mini）；**停靠成员 = 原生折叠**（collapse_req → SetNextWindowCollapsed(true) → 合并窗缩成标签条，可见、可点、可恢复）。恢复 = dyn_focus 的 uncoll 展开
+- 任务栏"隐藏"判定统一为 mini || collapsed；折叠的组 chip 变暗、点击展开
