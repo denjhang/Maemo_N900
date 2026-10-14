@@ -386,3 +386,8 @@
 - **核心补丁 #7**：dock 节点标签栏补上最小化按钮（X 左侧）——停靠/最大化窗口没有自己的标题栏，此前最小化按钮跟着消失；点击经回调作用到当前可见窗口
 - **加载策略按用户指示修正**：启动**一次性全量加载**（9 插件同帧 dlopen，实测无压力）；此后**仅在用户主动要求时扫描**（APPMGR RESCAN / USB 安装动作），不做周期性自动扫描——几十上百个 APP 也不会拖慢启动
 - 插件卸载/重装后由对应操作显式触发扫描，仍然即时生效
+
+## IMRUN v0.4.18（2026-10-14，DISPLAY 设置回归 + Demo 合并）
+- **SETTINGS 新增 DISPLAY 页**：FACE（MSYH/BITMAP）、FONT SIZE（10-32px）、UI SCALE（0.6-2.0x）——字体/缩放/DPI 设置回归系统设置（宿主新增导出 imrun_ui_fontface/fontsize/scale）
+- **Demo 合并**：WIDGETS + HELLO + 渲染统计合并为单一 **DEMO** 插件（笑脸图标，用户指定）；imguiset/widgets/hello 三个插件退役
+- 当前插件阵容：2 系统（SETTINGS/APPMGR）+ 6 常规（DEMO/TONEGEN/VIBRA/KEYS/FONTS + repo 备份）

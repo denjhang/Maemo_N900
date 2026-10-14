@@ -603,6 +603,19 @@ void imrun_minimize_by_title(const char *title) {
 extern "C" ImFont *imrun_font_cn(void) { return g_cnfont; }
 extern "C" ImFont *imrun_font_world(void) { return g_worldfont; }
 extern "C" ImFont *imrun_font_kr(void) { return g_krfont; }
+/* ---- UI display settings API (SETTINGS plugin) ---- */
+extern "C" void imrun_ui_fontface(int idx) {   /* 0=MSYH 1=BITMAP (g_fonts 0/3) */
+    if (idx == 0) ImGui::GetIO().FontDefault = g_fonts[0];
+    if (idx == 1) ImGui::GetIO().FontDefault = g_fonts[3];
+}
+extern "C" void imrun_ui_fontsize(float px) {
+    ImGuiStyle &st = ImGui::GetStyle();
+    st.FontSizeBase = (float)(int)(px + 0.5f);
+    st._NextFrameFontSizeBase = st.FontSizeBase;   /* per imgui_demo: BOTH */
+}
+extern "C" void imrun_ui_scale(float sc) {
+    ImGui::GetStyle().FontScaleMain = sc;
+}
 static const char *shell_clock(void) {
     static char buf[8];
     time_t tt = time(NULL);

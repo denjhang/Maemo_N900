@@ -11,6 +11,11 @@ extern char hw[8][96];
 extern int hw_n;
 }
 
+extern "C" {
+void imrun_ui_fontface(int);
+void imrun_ui_fontsize(float);
+void imrun_ui_scale(float);
+}
 extern "C" const char *imapp_name(void) { return "SETTINGS"; }
 extern "C" int imapp_system(void) { return 1; }
 extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
@@ -40,6 +45,21 @@ extern "C" void imapp_frame(double t) {
             ImGui::Separator();
             ImGui::Checkbox("DOCK MAY COVER SYSTEM BAR", &g_dock_covers_sysbar);
             ImGui::TextUnformatted("(off: docked/maximized windows stop above the bar)");
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("DISPLAY")) {
+            static int face = 0;
+            static const char *faces[2] = {"MSYH", "BITMAP"};
+            if (ImGui::Combo("FACE", &face, faces, 2))
+                imrun_ui_fontface(face);
+            static float fsize = 20.0f;
+            if (ImGui::SliderFloat("FONT SIZE", &fsize, 10.0f, 32.0f, "%.0f px",
+                                   ImGuiSliderFlags_AlwaysClamp))
+                imrun_ui_fontsize(fsize);
+            static float uiscale = 1.0f;
+            if (ImGui::SliderFloat("UI SCALE", &uiscale, 0.6f, 2.0f, "%.2fx",
+                                   ImGuiSliderFlags_AlwaysClamp))
+                imrun_ui_scale(uiscale);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("INFO")) {
