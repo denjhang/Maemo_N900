@@ -335,12 +335,18 @@ static int g_focus = -1;
 static void dyn_focus(int di) {
     if (di < 0 || di >= g_dyn_n) return;
     DynApp &a = g_dyn[di];
-    if (!a.ever) { a.cascade = true; a.ever = true; }
+    bool was_live = a.open && !a.closing && !a.mini;
     if (a.closing) a.closing = false;   /* reopen during fade = cancel */
     if (a.destroyed && a.init) { a.init(); a.destroyed = false; }  /* fresh start */
     a.open = true; a.mini = false;
     a.uncoll = true;                 /* opening/focusing always expands */
-    a.anim = 0; a.anim_t0 = now_double();
+    /* single-focus rule: re-clicking a live app ONLY switches focus -
+       no multi-open, no animation replay */
+    if (!was_live) {
+        if (!a.ever) { a.cascade = true; a.ever = true; }
+        a.anim = 0; a.anim_t0 = now_double();
+    }
+    g_desk_nav_sel = -1; g_desk_nav_on = false;
     g_focus = di;
 }
 static void dyn_minimize(int di) {
@@ -893,11 +899,11 @@ void igui_build_ui(double t, float fps) {
                                                                  : IM_COL32(255, 255, 255, 45),
                             10.0f, 0, hot ? 2.5f : 1.5f);
             }
-            if (i == g_desk_last) { /* persistent last-click focus ring */
-                dl->AddRect(ImVec2(bx - 2, by - 2), ImVec2(bx + cellw - 12, by + cellh - 10),
-                            IM_COL32(120, 200, 255, 150), 11.0f, 0, 1.5f);
+            if (i == g_focus && g_dyn[i].open) { /* THE focus ring (single) */
+                dl->AddRect(ImVec2(bx - 3, by - 3), ImVec2(bx + cellw - 11, by + cellh - 9),
+                            IM_COL32(120, 220, 255, 255), 12.0f, 0, 3.5f);
             }
-            if (i == g_desk_nav_sel && g_desk_nav_on && !g_desk_edit)
+            else if (i == g_desk_nav_sel && g_desk_nav_on && !g_desk_edit)
                 dl->AddRect(ImVec2(bx - 3, by - 3), ImVec2(bx + cellw - 11, by + cellh - 9),
                             IM_COL32(120, 220, 255, 255), 12.0f, 0, 3.5f);
             if (g_dyn[i].icon)
