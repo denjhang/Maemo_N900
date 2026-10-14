@@ -252,7 +252,6 @@ struct DynApp {
     bool destroyed;
     bool open, mini, ever, cascade, closing;
     bool collapsed, uncoll;          /* native fold = third state */
-    bool undock_req, mini_pending;   /* minimize of a DOCKED window */
     float anim; double anim_t0, close_t0;
 };
 static DynApp g_dyn[8];
@@ -327,6 +326,7 @@ static void order_swap(int a, int b) {
 static float g_tile_x[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
 static float g_tile_y[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
 bool g_ctrl_down = false;
+extern bool ImGui_IsWindowDocked(const char *name);
 static bool g_win_move = false;
 static float g_nudge_dx = 0, g_nudge_dy = 0;
 static float g_back_hl = 0, g_home_hl = 0;
@@ -344,17 +344,10 @@ static void dyn_focus(int di) {
     g_focus = di;
 }
 static void dyn_minimize(int di) {
-    if (di<0||di>=g_dyn_n) return;
-    DynApp &a = g_dyn[di];
-    extern bool ImGui_IsWindowDocked(const char *);
-    char tn[80];
-    snprintf(tn, sizeof tn, "%s###dyn%d", a.name, di);
-    if (a.open && !a.closing && ImGui_IsWindowDocked(tn)) {
-        a.undock_req = true;      /* Begin undocks this frame... */
-        a.mini_pending = true;    /* ...then we hide it the next */
-    } else
-        a.mini = true;
-    if (g_focus == di) g_focus = -1;
+    /* plain mini: for a DOCKED member this removes its tab from the node;
+       minimizing ALL members of a node hides the merged window whole -
+       ImGui remembers the dock layout by node ID, restore is identical */
+    if (di>=0&&di<g_dyn_n) { g_dyn[di].mini = true; if (g_focus==di) g_focus=-1; }
 }
 static void dyn_minimize_all(void) {
     for (int k = 0; k < g_dyn_n; k++) g_dyn[k].mini = true;
@@ -527,7 +520,7 @@ static void dyn_scan(void) {
         a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
         a.sys = (int (*)(void))dlsym(h, "imapp_system");
         a.open = a.mini = a.ever = a.cascade = a.closing = a.destroyed = false;
-        a.collapsed = a.uncoll = a.undock_req = a.mini_pending = false;
+        a.collapsed = a.uncoll = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
     }
@@ -729,7 +722,7 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     /* Begin returns FALSE for COLLAPSED (and clipped) windows - that is NOT
        a close request. Only p_keep==false (the X button) closes. This was
        the collapse-vanish bug: collapsed -> Begin false -> dyn_close. */
-    a.collapsed = ImGui::IsWindowCollapsed();   /* valid even when !shown */
+    a.collapsed = !ImGui_IsWindowDocked(title) && ImGui::IsWindowCollapsed();
     if (!shown) { ImGui::End(); return false; }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = di;
     return true;
