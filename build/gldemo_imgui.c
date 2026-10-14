@@ -861,6 +861,29 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     alog_t0 = now();
     alog("LIFECYCLE boot");
+    {   /* single instance: second launch from the desktop icon exits at once */
+        FILE *lf = fopen("/tmp/imrun.lock", "r");
+        if (lf) {
+            int oldpid = 0;
+            { char lb[32]; if (fgets(lb, sizeof lb, lf)) oldpid = atoi(lb); }
+            fclose(lf);
+            char pc[64];
+            snprintf(pc, sizeof pc, "/proc/%d/cmdline", oldpid);
+            FILE *pf = fopen(pc, "r");
+            if (pf) {
+                char cb[128] = {0};
+                fread(cb, 1, sizeof cb - 1, pf);
+                fclose(pf);
+                if (strstr(cb, "imrun")) {
+                    alog("LIFECYCLE second instance blocked (pid %d alive)", oldpid);
+                    printf("imrun already running (pid %d)\n", oldpid);
+                    return 0;
+                }
+            }
+        }
+        FILE *wl = fopen("/tmp/imrun.lock", "w");
+        if (wl) { fprintf(wl, "%d\n", (int)getpid()); fclose(wl); }
+    }
     {
         extern void imrun_atexit_log(void);
         imrun_atexit_log();

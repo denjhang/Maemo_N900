@@ -16,7 +16,7 @@ if len(sys.argv) > 2:
 
 c = paramiko.SSHClient()
 c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-c.connect('192.168.101.111', username='root', password='123456',
+c.connect('192.168.101.108', username='root', password='123456',
           allow_agent=False, look_for_keys=False)
 s = c.open_sftp()
 s.put(binname, '/home/user/' + binname)
