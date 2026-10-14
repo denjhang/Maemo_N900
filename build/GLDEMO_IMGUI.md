@@ -399,3 +399,7 @@
 - 宿主新增导出：imrun_ui_fontface/fontsize/scale（DISPLAY 页调用）
 - 桌面最终形态：SETTINGS + APPMGR + DEMO 三图标，商店含全部备份
 - **v0.4.19 补**：DEMO 六标签版本此前因部署命令链断裂未真正编译/部署（部署的仍是旧无标签版）——已重编译热替换并重启，六标签（HELLO/WIDGETS/TONEGEN/VIBRA/KEYS/FONTS）生效
+
+### v0.4.19 发布记录（2026-10-14）
+- 发布包: research/releases/imrun_release_v0.4.19.tar.gz
+- 统一插件架构成熟版：3 插件（SETTINGS 四页 / APPMGR / DEMO 六页）、单实例、设置持久化、可逆卸载、本地商店、黑匣子、7 个 ImGui 核心补丁全源
