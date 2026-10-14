@@ -269,7 +269,8 @@ extern "C" int imrun_dyn_state(int i) {
 }
 extern "C" void imrun_dyn_kill(int i) { if (i>=0&&i<g_dyn_n&&g_dyn[i].open&&!g_dyn[i].closing){g_dyn[i].closing=true;g_dyn[i].close_t0=now_double();} }
 extern "C" void imrun_dyn_uninstall(int i) { if (i>=0&&i<g_dyn_n&&!g_dyn[i].sys) g_dyn_dead = i; }
-extern "C" void imrun_host_rescan(void) { g_dyn_scan_cnt = 1000; }
+static bool g_scan_req = true;   /* initial scan + user-requested only */
+extern "C" void imrun_host_rescan(void) { g_scan_req = true; }
 
 static char g_desk_filter[32] = "";
 static bool g_desk_edit = false;
@@ -478,13 +479,12 @@ static void settings_load(void) {
 }
 
 static void dyn_scan(void) {
-    /* stagger: ONE new plugin per scan tick (~2s apart) - the startup
-       dlopen storm caused a 5s swap stall and an 18fps burst */
-    int load_budget = 1;
+    /* user directive: load ALL plugins at once at startup; afterwards scan
+       ONLY when the user asks (APPMGR RESCAN / USB install) */
     DIR *d = opendir(APPS_DIR);
     if (!d) return;
     struct dirent *e;
-    while ((e = readdir(d)) && g_dyn_n < 8 && load_budget > 0) {
+    while ((e = readdir(d)) && g_dyn_n < 8) {
         if (e->d_name[0] == '.') continue;
         bool have = false;
         for (int k = 0; k < g_dyn_n; k++)
@@ -509,7 +509,6 @@ static void dyn_scan(void) {
         a.collapsed = a.uncoll = false;
         a.anim = 1; a.anim_t0 = a.close_t0 = 0;
         if (a.init) a.init();
-        load_budget--;
     }
     closedir(d);
 }
@@ -624,7 +623,8 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     bool pushed_alpha = false;
     if (a.cascade) {
         a.cascade = false;
-        int n = g_dyn_scan_cnt % 6;
+        static int casc_seq = 0;
+        int n = casc_seq++ % 6;
         ImVec2 cp = ImVec2(24 + n * 42, 20 + n * 34);
         ImVec2 cs = ImVec2(size.x < 420 ? 420 : size.x, size.y < 300 ? 300 : size.y);
         if (cp.x + cs.x > 790) cp.x = 790 - cs.x;
@@ -724,9 +724,9 @@ void igui_build_ui(double t, float fps) {
             s_last_sig = sig;
         }
     }
-    if (++g_dyn_scan_cnt >= 120) {
+    if (g_scan_req) {
+        g_scan_req = false;
         int before = g_dyn_n;
-        g_dyn_scan_cnt = 0;
         dyn_scan();
         if (g_dyn_n != before) order_sync();
     }

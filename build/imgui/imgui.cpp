@@ -19744,6 +19744,18 @@ static void ImGui::DockNodeUpdateTabBar(ImGuiDockNode* node, ImGuiWindow* host_w
             for (int n = 0; n < tab_bar->Tabs.Size; n++)
                 TabBarCloseTab(tab_bar, &tab_bar->Tabs[n]);
         }
+        // IMRUN patch 7: minimize button in the DOCK NODE title bar too -
+        // docked/maximized windows have no window titlebar of their own
+        if (close_button_is_visible && ImGui::ImGui_g_MinimizeCallback && node->VisibleWindow)
+        {
+            ImGuiItemFlags backup_item_flags_m7 = g.CurrentItemFlags;
+            g.CurrentItemFlags |= ImGuiItemFlags_NoFocus;
+            float button_sz7 = g.FontSize;
+            ImVec2 min_pos7 = ImVec2(close_button_pos.x - button_sz7 - style.ItemInnerSpacing.x, close_button_pos.y);
+            if (MinimizeButton(host_window->GetID("#MINNODE"), min_pos7))
+                ImGui::ImGui_g_MinimizeCallback(node->VisibleWindow->Name);
+            g.CurrentItemFlags = backup_item_flags_m7;
+        }
         //if (IsItemActive())
         //    focus_tab_id = tab_bar->SelectedTabId;
         if (!close_button_is_enabled)
