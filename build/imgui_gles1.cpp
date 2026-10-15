@@ -800,7 +800,12 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
         ImGui::End();
         return false;
     }
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) g_focus = di;
+    /* EXACT match only (NavWindow == this window). RootAndChildWindows also
+       passes when the group HOST holds focus (click on tab-bar empty space) -
+       then EVERY member claims focus and g_focus snaps to the highest-index
+       member: taskbar chip label flickers, chip click focus/minimize routing
+       misfires ("lost" minimize animation). The SELECTED TAB is the focus. */
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_None)) g_focus = di;
     return true;
 }
 static void shell_end_dyn(void) { ImGui::End(); }

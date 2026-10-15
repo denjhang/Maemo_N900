@@ -498,3 +498,9 @@
 - 二进制 md5: 428dfb30cb75879bf8f2e0fbeb5db78f（/home/user/imrun/imrun）
 - **根因**（v0.4.31 重构引入的 host 块判定错误）：`if (!a.mfade && a.anim<1) {} else if (!a.fade_end) continue;` —— 正在 mfade 淡出的成员掉进 else 且 fade_end=false → **整个淡出期间组铬件从未被缩放**，直到收尾帧才从全亮度骤降 0（切选中标签后视觉上=丢动画/瞬间消失）
 - 修法：host 块条件简化为语义本来的样子——`fade_k<1`（中途任意淡入淡出）或 `fade_end`（收尾帧压 0）即缩放；配合 docked_now 分流。教训：嵌套 if/else 修饰条件时，先把真值表列出来
+
+## IMRUN v0.4.35（2026-10-15，焦点被组 host 抢占 → 胶囊名称变动/最小化偶发失灵）
+- 二进制 md5: 4f9f7f5dc75240a4d6d963235534921f（/home/user/imrun/imrun）
+- **用户线索**：成组→最小化→恢复后，任务栏组胶囊的名称在变动
+- **根因**：shell 的聚焦判定用 `IsWindowFocused(RootAndChildWindows)`——含 ChildWindows 语义"当前窗口是 NavWindow 的子孙"。当焦点落在**组 host 窗口**上（点标签栏空白处等），所有成员都是 host 的子孙 → 全员通过 → g_focus 被循环中最后一个成员（最高 di）抢走：胶囊 sel 跟着 g_focus 跳动（名称变动）；点 chip 的 foc 判定失真，该最小化时走了"仅聚焦"分支（偶发"丢"最小化动画）
+- 修法：改 `ImGuiFocusedFlags_None` 精确匹配（NavWindow==本窗口）——只有选中的标签页认领焦点
