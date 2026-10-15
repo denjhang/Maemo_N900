@@ -817,7 +817,7 @@ static void *audio_writer(void *arg) {
         short frag[512 * 2];
         unsigned long seq = 0;
         while (thread_run) {
-            if (audio_deadline && now() > audio_deadline) break;
+            if (audio_deadline && now() > audio_deadline) { audio_on = 0; break; }
             gen_samples(frag, 512);
             if (!ao_play_fn(ao_dev, (char *)frag, sizeof(frag))) {
                 alog("AO play FAIL seq=%lu", seq);
@@ -966,6 +966,12 @@ void audio_stop_full(void) {
         audio_on = 0;
         return;
     }
+    /* nothing active on the non-ALSA paths? then pcm may be NULL (released
+       when a server backend took over) - dereferencing it segfaults */
+    if (!thread_run && !ao_dev && !sdl_audio_open && !pcm) {
+        audio_deadline = 0; audio_on = 0;
+        return;
+    }
     if (audio_backend == 1 && ao_dev) {
         /* join is fast: ao_play hands bytes to the server-side queue and
            returns - the server does the pacing, nothing blocks for long */
@@ -1013,6 +1019,9 @@ static void *audio_ctl(void *arg) {
     while (1) {
         if (usleep_fn) usleep_fn(10000);
         int cmd = audio_cmd;
+        if (!cmd && audio_backend == 2 && sdl_audio_open &&
+            audio_deadline && now() > audio_deadline)
+            audio_cmd = cmd = 2;   /* SDL has no writer thread: ctl enforces */
         if (!cmd) continue;
         audio_cmd = 0;
         if (cmd == 2) {

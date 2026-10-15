@@ -552,3 +552,10 @@
 - **移植**：运行时 dlopen libSDL-1.2.so.0（SDL_Init/SDL_OpenAudio/SDL_PauseAudio/SDL_CloseAudio 逐符号），SDL_AudioSpec 布局自声明（不引 SDL 头）；callback `sdl_mixaudio` = `gen_samples(stream, len/4)`（= NativeMix 同形）；Stop = SDL_PauseAudio(1)+SDL_CloseAudio（SDL 自 join 内部线程，host 不 spawn）
 - 三后端互切互斥：启动任一后端前释放另外两个的设备（plughw 常持/libao dev/SDL audio）
 - TONEGEN 三单选：`ALSA / AO(vgmplay) / SDL(ppsspp)`
+
+## IMRUN v0.4.42（2026-10-15，前端音频 bug 修复 + 音频调查交接文档）
+- 二进制 md5: 9965519f512b97f6b7e056651bc093ef；demo.so e0ef332c0ab7b6d950d0fbb113ab329d
+- **负秒数**：AO writer 到 deadline break 没清 audio_on（已清）；SDL 无 writer 线程，deadline 由 audio_ctl 代执行；demo 显示 clamp≥0
+- **闪退**：audio_stop_full 在 pcm 已被 server 后端释放(NULL)时掉进 ALSA 分支解引用 → 顶部空态短路
+- AO/SDL 无声与 vgmplay 机制差异调查未完，全部已知事实+证据+待答问题移交 **docs/AUDIO_HANDOFF.md**（新窗口继续）
+- 重要旁证：被取消的智能体用 canberra-gtk-play 触发过 NokiaTune.aac 循环（用户听到的铃声）——证明 user 会话经 libcanberra→pulse **能出声**；libao 插件目录只有 libalsa09.so；探针卡死在 do_sys_poll（pulse 客户端特征）
