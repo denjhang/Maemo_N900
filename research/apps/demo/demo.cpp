@@ -17,10 +17,14 @@ extern "C" void imapp_icon(void *dlv, float cx, float cy, float s) {
 extern "C" {
 void audio_ui_start(int seconds);
 void audio_ui_stop(void);
+void audio_ui_set_backend(int be);
 extern int audio_on;
+extern long audio_flow;
+extern int dbg_underruns;
+extern int dbg_stalls;
 extern double audio_deadline;
 extern int audio_volume, audio_wave;
-extern void imrun_audio_wave(int);
+extern int audio_backend; /* 0 ALSA 1 libao(vgmplay) 2 SDL(ppsspp) */
 void vibra_ping(int ms);
 void vibra_stop(void);
 extern char last_key[64];
@@ -82,21 +86,40 @@ extern "C" void imapp_frame(double t) {
     ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("TONEGEN")) {
+        const char *bname = audio_backend == 0 ? "ALSA  " : audio_backend == 1 ? "AO(VGM)" : "SDL(PSP)";
         if (audio_on) {
             int left = (int)(audio_deadline - imrun_now());
-            ImGui::Text("ALSA PCM: PLAYING 440Hz (%ds left)", left);
-        } else
-            ImGui::Text("ALSA PCM: idle");
+            if (left < 0) left = 0;   /* deadline can lapse mid-drain */
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f),
+                               "%s PLAYING 440Hz (%ds left)", bname, left);
+        } else {
+            ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.3f, 1.0f),
+                               "%s idle", bname);
+        }
+        /* live proof of stream: frames produced this session keeps climbing while
+           a backend is actually delivering. zero = nothing is flowing. */
+        ImGui::Text("flow=%ld | underrun=%d | stall=%d", audio_flow, dbg_underruns, dbg_stalls);
+
         if (ImGui::Button("PLAY 20s", ImVec2(140, 48)))
             audio_ui_start(20);
         ImGui::SameLine();
         if (ImGui::Button("STOP", ImVec2(140, 48)))
             audio_ui_stop();
+
         const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
-        { int wsel = audio_wave;
-        if (ImGui::Combo("WAVE", &wsel, waves, 4))
-            imrun_audio_wave(wsel);  /* switch at silence: no full-scale step */
-        }
+        ImGui::Combo("WAVE", &audio_wave, waves, 4);
+
+        ImGui::Text("OUT BACKEND:");
+        ImGui::SameLine();
+        /* safe switch: serialized through the audio-control thread so the OLD
+           backend is fully STOPped before the flag flips (no leaked device,
+           no "switched then silent") */
+        if (ImGui::RadioButton("ALSA", audio_backend == 0)) audio_ui_set_backend(0);
+        ImGui::SameLine();
+        if (ImGui::RadioButton("AO(VGM)", audio_backend == 1)) audio_ui_set_backend(1);
+        ImGui::SameLine();
+        if (ImGui::RadioButton("SDL(PSP)", audio_backend == 2)) audio_ui_set_backend(2);
+
         ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
         ImGui::EndTabItem();
     }

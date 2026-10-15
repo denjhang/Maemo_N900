@@ -103,6 +103,8 @@ int audio_on;
 int audio_amp = 16000;
 int dbg_underruns = 0;
 int dbg_key_events = 0;
+long audio_flow = 0;   /* frames the active backend has actually produced this session;
+                          the TONEGEN panel shows this ticking up = sound is flowing */
 /* wallpaper: 0=3D dynamic cubes 1=3D static 2=2D dynamic 3=2D static 4=plain
    variant: color palette 0..3 */
 int g_wall_mode = 0, g_wall_variant = 0;
@@ -700,6 +702,17 @@ int pcm_resetup(void) {
    while our direct plughw path XRUNs on every UI stall. Verbatim call
    sequence, runtime dlopen (zero link-time deps). */
 typedef struct { int bits; int rate; int channels; int byte_format; } ao_fmt_t;
+/* libao ao_option is a 3-pointer linked list: {const char *key; const char
+   *value; struct ao_option *next} (see research/libao-src .../include/ao/ao.h).
+   We hand-build it to avoid depending on ao_append_option (the device-stock
+   11KB mini libao does NOT export it). */
+typedef struct { const char *key; const char *value; void *next; } ao_option_link_t;
+/* alsa09 routes "default" through /etc/asound.conf -> type pulse -> system-mode
+   pulse that refuses user(29999). Bypass it with a direct ALSA hw device, the
+   vgmplay-era path that always worked. Single-node list: libao walks
+   options->next until NULL, and each node's key MUST be non-NULL (alsa09 does
+   strcmp(key,"dev") with no guard) - a dummy {NULL,...} sentinel would crash it. */
+static ao_option_link_t ao_dev_opt_plughw = { "dev", "plughw:0,0", NULL };
 static void *hAO;
 static int (*ao_initialize_fn)(void);
 static int (*ao_default_driver_id_fn)(void);
@@ -709,9 +722,15 @@ static void (*ao_close_fn)(void *);
 static void *ao_dev;
 static int ao_open(void) {
     if (!hAO) {
-        static const char *libs[] = { "/opt/libao/lib/libao.so.2", "libao.so.2",
-                                      "/usr/lib/libao.so.2",
-                                      "/home/user/imrun/lib/libao.so.2", NULL };
+        /* audiolib/ is the deployment slot for the full 61KB dlopen-enabled
+           libao (research/libao-src .../src/.libs/libao.so.2.1.3) + its
+           plugins dir /opt/libao/lib/ao/plugins-2. The device-stock
+           /opt/libao/lib/libao.so.2 is an 11KB mini libao with NO alsa plugin
+           loader and NO ao_append_option - do not rely on it. */
+        static const char *libs[] = { "/home/user/imrun/audiolib/libao.so.2",
+                                      "/home/user/imrun/lib/libao.so.2",
+                                      "/opt/libao/lib/libao.so.2", "libao.so.2",
+                                      "/usr/lib/libao.so.2", NULL };
         for (int i = 0; libs[i] && !hAO; i++)
             hAO = dlopen(libs[i], 2 /*RTLD_NOW*/);
         if (!hAO) { alog("AO: libao.so.2 not found"); return 0; }
@@ -727,7 +746,7 @@ static int ao_open(void) {
         ao_initialize_fn();
     }
     ao_fmt_t fmt = { 16, 44100, 2, 4 /*AO_FMT_NATIVE little-endian*/ };
-    ao_dev = ao_open_live_fn(ao_default_driver_id_fn(), &fmt, NULL);
+    ao_dev = ao_open_live_fn(ao_default_driver_id_fn(), &fmt, &ao_dev_opt_plughw);
     alog("AO open_live dev=%p %s", ao_dev, ao_dev ? "OK" : "FAIL");
     return ao_dev != NULL;
 }
@@ -747,8 +766,11 @@ static int (*SDL_OpenAudio_fn)(SDL_AudioSpec_t *, SDL_AudioSpec_t *);
 static void (*SDL_PauseAudio_fn)(int);
 static void (*SDL_CloseAudio_fn)(void);
 static int sdl_audio_open;
+static unsigned long sdl_cb_count;   /* SDL internal-thread callback count: proof the tone is actually being pulled */
 static void sdl_mixaudio(void *userdata, unsigned char *stream, int len) {
     (void)userdata;
+    sdl_cb_count++;
+    audio_flow += len / 4;   /* stereo 16-bit frames produced */
     gen_samples((short *)stream, len / 4);   /* == NativeMix(stream, len/4) */
 }
 static int sdl_open(void) {
@@ -762,6 +784,13 @@ static int sdl_open(void) {
         if (!SDL_Init_fn || !SDL_OpenAudio_fn || !SDL_PauseAudio_fn ||
             !SDL_CloseAudio_fn) { alog("SDL: missing symbols"); hSDL = NULL; return 0; }
     }
+    /* Pin the pulse driver. The ALSA driver opens "default" which /etc/asound.conf
+       routes to pulse anyway, but SDL's own pulse driver keeps the server-side
+       deep queue that absorbs UI stalls (the whole point of this backend). If
+       we leave SDL to auto-pick it could silently fall to a different driver on
+       a device-state change and go mute - pin it explicitly. */
+    setenv("SDL_AUDIODRIVER", "pulse", 1);
+
     if (SDL_Init_fn(0x10 /*SDL_INIT_AUDIO*/) < 0) {
         alog("SDL_Init AUDIO fail"); return 0;
     }
@@ -783,27 +812,48 @@ static int sdl_open(void) {
 }
 static void sdl_close(void) {
     if (!sdl_audio_open) return;
+    alog("SDL close cb_count=%lu", sdl_cb_count);
     SDL_PauseAudio_fn(1);
     SDL_CloseAudio_fn();
     sdl_audio_open = 0;
     alog("SDL audio closed");
 }
-/* shared tone generator (both backends render the same samples) */
+/* shared tone generator (both backends render the same samples).
+   sinf() is soft-float on the N900 and far too slow inside the hot loop
+   (log: gen+write 40-70ms > 46ms period -> EPIPE/XRUN storm = the
+   "crackle/half-second then silence"). Pre-computed wavetable kills that. */
+#define WT_SIZE 1024
+static float wavetable_sine[WT_SIZE];
+static int wavetable_ready = 0;
+static void wavetable_init(void) {
+    for (int i = 0; i < WT_SIZE; i++)
+        wavetable_sine[i] = sinf(2.0f * 3.14159265f * (float)i / (float)WT_SIZE);
+    wavetable_ready = 1;
+}
 static void gen_samples(short *dst, int n) {
+    if (!wavetable_ready) wavetable_init();
+    /* phase step in wavetable slots per sample: 440Hz over 44100Hz */
+    double step = (double)WT_SIZE * 440.0 / 44100.0;
     for (int i = 0; i < n; i++) {
-        float ph = audio_phase / 6.2831853f; ph -= (float)(int)ph; /* 0..1 */
-        float w;
-        switch (audio_wave) {
-        case 1: w = ph < 0.5f ? ph * 4.0f - 1.0f : 3.0f - ph * 4.0f; break; /* triangle */
-        case 2: w = ph < 0.5f ? 1.0f : -1.0f; break;                        /* square */
-        case 3: w = ph * 2.0f - 1.0f; break;                                 /* saw */
-        default: w = sinf(audio_phase); break;                               /* sine */
+        int idx = (int)audio_phase;
+        float f = audio_phase - (float)idx;
+        float w = wavetable_sine[idx & (WT_SIZE - 1)] * (1.0f - f) +
+                  wavetable_sine[(idx + 1) & (WT_SIZE - 1)] * f;
+        if (audio_wave == 1) {          /* triangle */
+            float p = (float)(idx & (WT_SIZE - 1)) / (float)WT_SIZE;
+            w = p < 0.5f ? p * 4.0f - 1.0f : 3.0f - p * 4.0f;
+        } else if (audio_wave == 2) {   /* square */
+            w = (idx & (WT_SIZE >> 1)) ? 1.0f : -1.0f;
+        } else if (audio_wave == 3) {   /* saw */
+            float p = (float)(idx & (WT_SIZE - 1)) / (float)WT_SIZE;
+            w = p * 2.0f - 1.0f;
         }
         float v = (float)audio_amp * (audio_volume / 100.0f) * w;
         short s = (short)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
         dst[i * 2] = s;
         dst[i * 2 + 1] = s;
-        audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
+        audio_phase += (float)step;
+        if (audio_phase >= (float)WT_SIZE) audio_phase -= (float)WT_SIZE;
     }
 }
 
@@ -819,6 +869,7 @@ static void *audio_writer(void *arg) {
         while (thread_run) {
             if (audio_deadline && now() > audio_deadline) { audio_on = 0; break; }
             gen_samples(frag, 512);
+            audio_flow += 512;
             if (!ao_play_fn(ao_dev, (char *)frag, sizeof(frag))) {
                 alog("AO play FAIL seq=%lu", seq);
                 break;
@@ -852,6 +903,7 @@ static void *audio_writer(void *arg) {
             break;
         }
         gen_samples(chunk, PERIOD);
+        audio_flow += PERIOD;
         long w = snd_pcm_writei(pcm, chunk, PERIOD);
         long done = 0;
         while (w > 0 && done + w < PERIOD) {
@@ -902,17 +954,12 @@ static int pcm_acquire(void) {
 }
 int audio_start(int seconds) {
     if (!pthread_create_fn) return 0;
-    if (audio_backend == 2) {
-        /* PPSSPP path: SDL runs its own audio thread - we spawn nothing */
-        if (pcm) { snd_pcm_close(pcm); pcm = NULL; alog("SDL: alsa hold released"); }
-        if (ao_dev) { if (ao_close_fn) ao_close_fn(ao_dev); ao_dev = NULL; }
-        if (!sdl_audio_open && !sdl_open()) return 0;
-        alog("S SDL START req=%ds", seconds);
-        audio_phase = 0;
-        audio_deadline = seconds ? now() + seconds : 0;
-        audio_on = 1;
-        return 1;
-    }
+    /* SDL(ppsspp) backend reuses the proven ALSA plughw writer path. Its
+       native pulse callback path is broken on this device under load:
+       audio_dbg.log shows "SDL close cb_count=0" (callback thread never ran)
+       then SDL_CloseAudio hangs, freezing the resident control thread so the
+       radio buttons can't switch. The dlopen/符号 skeleton below stays for
+       reference, but sound goes through plughw:0,0 like the ALSA backend. */
     if (audio_backend == 1) {
         /* libao backend: release the ALSA hw hold so the ao server path
            (pulse on this device) can wake up and take the card */
@@ -931,6 +978,7 @@ int audio_start(int seconds) {
         audio_on = 1;
         return 1;
     }
+    /* backend 0 (ALSA) and backend 2 (SDL/PSP) both go through ALSA plughw */
     if (!pcm) pcm_acquire();   /* returning from AO backend: take hw back */
     if (!pcm) return 0;
     sdl_close();   /* leaving SDL backend? its device must not linger */
@@ -1009,9 +1057,14 @@ void audio_stop_full(void) {
    stop path costs 50-150ms (join + drop + full resetup) - measured. Running
    it in the UI thread starved hildon's touch-vibra on every PLAY re-tap.
    UI only registers intent; this resident thread does the heavy work. */
-static volatile int audio_cmd, audio_cmd_sec; /* 0 none, 1 start, 2 stop */
+static volatile int audio_cmd, audio_cmd_sec, audio_cmd_be; /* 0 none, 1 start, 2 stop, 3 set-backend */
 void audio_ui_start(int seconds) { audio_cmd_sec = seconds; audio_cmd = 1; }
 void audio_ui_stop(void)         { audio_cmd = 2; }
+/* backend switch must be serialized through the ctl thread: STOP the OLD
+   backend first (using the THEN-current audio_backend), then flip. Doing the
+   flip inline while audio is playing leaves the old device/thread leaked and
+   the next STOP targets the wrong path (= the "switched then silent" bug). */
+void audio_ui_set_backend(int be) { audio_cmd_be = be; audio_cmd = 3; }
 void imrun_audio_stop_all(void)     { audio_cmd = 2; } /* plugin-facing */
 double imrun_now(void)             { return now(); } /* plugin clock (relative) */
 static void *audio_ctl(void *arg) {
@@ -1024,7 +1077,13 @@ static void *audio_ctl(void *arg) {
             audio_cmd = cmd = 2;   /* SDL has no writer thread: ctl enforces */
         if (!cmd) continue;
         audio_cmd = 0;
-        if (cmd == 2) {
+        if (cmd == 3) {
+            alog("C ctl: SETBACKEND %d->%d", audio_backend, audio_cmd_be);
+            if (audio_on || thread_run || ao_dev || sdl_audio_open)
+                audio_stop_full();   /* stops the CURRENT (old) backend */
+            audio_backend = audio_cmd_be;
+            alog("C ctl: backend now %d", audio_backend);
+        } else if (cmd == 2) {
             alog("C ctl: STOP");
             audio_stop_full();
         } else if (cmd == 1) {
@@ -1192,6 +1251,57 @@ int main(void) {
         printf("AUTOTEST done, log at /home/user/audio_dbg.log\n");
         return 0;
     }
+    }
+
+    /* AOTEST: audio backend stability probe, low volume, headless + file
+       triggered (mirrors AUTOTEST's reliable file path). Rapid PLAY/volume
+       jitter/STOP/double-STOP cycles. Detects stream dropouts in BOTH
+       backends: libao (plughw:0,0 direct) and SDL (pulse server queue).
+       All markers in /home/user/audio_dbg.log. */
+    if (access("/home/user/aotest", 0) == 0) {
+        unlink("/home/user/aotest");
+        alog_t0 = now();
+        alog("=== AOTEST begin: wave=%d amp=%d low-volume rapid play/vol/stop ===",
+             audio_wave, audio_amp);
+        audio_wave    = 0;   /* sine */
+        audio_amp     = 1500;/* low volume: peak ~1500*vol/100, stays quiet */
+        audio_volume  = 100;
+        int vols[] = { 30, 200, 80, 15, 250, 120, 40, 300, 60, 180, 90, 20, 260, 140, 50 };
+        int nvols = (int)(sizeof vols / sizeof vols[0]);
+        int hard_fail = 0;
+        int backends[3] = { 0, 1, 2 };   /* 0=ALSA 1=libao(vgmplay) 2=SDL(psp, reuses ALSA path) */
+        for (int bi = 0; bi < 3 && !hard_fail; bi++) {
+            int be = backends[bi];
+            audio_backend = be;
+            alog("=== AOTEST backend=%d (%s) ===", be,
+                 be == 0 ? "ALSA" : be == 1 ? "libao-vgmplay" : "SDL-psp");
+            for (int cyc = 0; cyc < 10; cyc++) {
+                alog("--- AOTEST be%d cyc %d: PLAY(2s) ---", be, cyc);
+                if (!audio_start(2)) {
+                    alog("AOTEST be%d cyc %d: audio_start FAILED (open/acquire dropped)", be, cyc);
+                    hard_fail = 1;
+                    break;
+                }
+                for (int rep = 0; rep < 2; rep++) {
+                    for (int k = 0; k < nvols; k++) {
+                        audio_volume = vols[k];
+                        alog("AOTEST be%d cyc %d vol=%d on=%d ald=%d ao=%p", be, cyc,
+                             audio_volume, audio_on, sdl_audio_open, ao_dev);
+                        usleep_fn(25000); /* rapid: user dragging the VOL slider */
+                    }
+                }
+                alog("--- AOTEST be%d cyc %d: STOP (sdl_cb=%lu) ---", be, cyc, sdl_cb_count);
+                audio_stop_full();
+                usleep_fn(40000);
+                alog("--- AOTEST be%d cyc %d: STOP again (empty-state short-circuit) ---", be, cyc);
+                audio_stop_full();
+                usleep_fn(60000);
+            }
+        }
+        alog("=== AOTEST end: hard_fail=%d max_stall=%.3fs stalls=%d underruns=%d -> exit(0) ===",
+             hard_fail, dbg_max_stall, dbg_stalls, dbg_underruns);
+        printf("AOTEST done, log at /home/user/audio_dbg.log\n");
+        return 0;
     }
 
 

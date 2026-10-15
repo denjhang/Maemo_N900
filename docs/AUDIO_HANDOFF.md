@@ -1,5 +1,8 @@
 # IMRUN 音频后端调查交接文档 v2(给能力强的执行型智能体)
 
+> **⚠️ 本文档已归档。调查已完成，结论见底部"七、最终结论"。**
+> 以下原始内容保留作为调查过程记录，但其中"设备 libao 是完整 0.8.8 框架"的核心假设**已被探针实测推翻**——设备 `/opt/libao/lib/libao.so.2` 实为 11KB mini 定制版，无 `ao_append_option`、硬编码 `snd_pcm_open("default")`。完整分析和修复见 `build/GLDEMO_IMGUI.md` v0.4.43 条目。
+
 > **你是执行型调查员,不是顾问。** 本文档给足了你全部已知事实和工具。
 > 你的产出必须是:①设备上跑通的三路探针实测结果;②一个改好的 IMRUN 后端补丁(经本窗口部署验证)。
 > 不许只写分析和建议然后停手。不许在设备上留下任何循环发声的进程。不许动 ALSA 后端和 UI 的既有行为。
@@ -82,4 +85,43 @@ arm-linux-gnueabi-gcc --sysroot=/opt/sysroot -O1 \
 - vgmplay-maemo 后端:`research/vgmplay-maemo/VGMplay for maemo 5/VGMPlay_040-9_src/Stream.c`(USE_LIBAO 路径)
 - ppsspp 后端:`research/ppsspp_n900/ppsspp-0.9.6/native/base/PCMain.cpp`
 - IMRUN 音频代码:`build/gldemo_imgui.c`(搜 audio_backend / ao_open_live / sdl_open)
-- 开发日志:`build/GLDEMO_IMGUI.md`(搜 v0.4.38/40/41/42)
+- 开发日志:`build/GLDEMO_IMGUI.md`(搜 v0.4.38/40/41/42/43)
+
+## 七、最终结论（调查完成，2026-10-15）
+
+### AO 后端无声根因（推翻本文档第三·五节的假设）
+
+本文档假设设备 `/opt/libao/lib/libao.so.2` 是"完整 0.8.8 框架 + dlopen alsa09 插件"。**探针实测推翻了这个假设**：
+
+1. **设备 libao 是 11KB mini 定制版（`mini_libao.c`），不是完整 0.8.8**：只导出 8 个函数，**没有 `ao_append_option`/`ao_option`**，`ao_open_live` 硬编码 `snd_pcm_open("default")`。无法指定 `dev=plughw:0,0`。
+2. **`/etc/asound.conf` 把 ALSA `default` 路由到 `type pulse`**：mini libao 的 `snd_pcm_open("default")` → pulse。路径不可控、绕不开 pulse。
+3. **完整 libao 0.8.8 在 `research/libao-src/libao-0.8.8/src/.libs/libao.so.2.1.3`（61KB，带 dlopen/dlsym 引用，插件路径硬编码 `/opt/libao/lib/ao/plugins-2`）**。设备 alsa09 插件就在该路径下。
+4. **build/libao.so.2（58KB）是残缺版**：编译时 `HAVE_DLOPEN` 未定义，只有静态 null/wav/raw/au 驱动，没有 alsa09。
+
+### 修复
+
+- `ao_open_live` 第三参数从 `NULL` 改为手建的 `{"dev","plughw:0,0",NULL}` 单节点链表（结构布局从 `ao.h` 实证）
+- dlopen 搜索路径增加 `/home/user/imrun/audiolib/libao.so.2`（部署完整版 61KB libao 到这里）
+- ALSA/SDL/UI 一行未动
+
+### 探针实测（全部 user(29999) 模式）
+
+| 探针 | 结果 |
+|---|---|
+| A: ALSA plughw:0,0 直写 | ✅ 出声 |
+| B: build/libao(58KB)+dev | ❌ 残缺版无 dlopen 插件 |
+| C: 设备 mini libao 默认 | ⚠️ 能 open 但路径不可控 |
+| D: **完整 61KB libao+alsa 插件+dev=plughw** | ✅ **出声** |
+| E: 完整 61KB libao+default_driver_id+dev | ✅ open OK |
+
+### AOTEST 零断流验证
+
+20 轮 PLAY/快速调音量(15档×2)/STOP/双STOP 循环：`hard_fail=0 max_stall=0 stalls=0 underruns=0`，`AO play FAIL`=0。
+
+### SDL 后端无声结论
+
+设备 `libSDL-1.2.so.0` ldd 依赖 `libpulse-simple.so.0`+`libpulse.so.0`——100% 走 pulse，与 AO 默认死路同根。N900 无 `/dev/dsp`。
+
+### PPSSPP 音频架构研究
+
+PPSSPP 的 SDL callback `mixaudio` → `NativeMix` → `PSPMixer::Mix` → `__AudioMix`，从 `outAudioQueue`（`FixedSizeQueue<s16, 512*16>` = 186ms 深缓冲）弹出采样。生产者（`__AudioUpdate`，每 64 样本/1.45ms 由 CoreTiming 触发）和消费者（SDL 音频线程，2048 样本/46ms）通过 186ms 队列解耦。IMRUN 的 SDL 后端无此队列，`sdl_mixaudio` 直接调 `gen_samples` 实时生成——无缓冲隔离，重 GPU 负载下直接 underrun。详见 `build/GLDEMO_IMGUI.md` v0.4.43 条目。

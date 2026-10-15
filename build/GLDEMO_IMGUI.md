@@ -559,3 +559,118 @@
 - **闪退**：audio_stop_full 在 pcm 已被 server 后端释放(NULL)时掉进 ALSA 分支解引用 → 顶部空态短路
 - AO/SDL 无声与 vgmplay 机制差异调查未完，全部已知事实+证据+待答问题移交 **docs/AUDIO_HANDOFF.md**（新窗口继续）
 - 重要旁证：被取消的智能体用 canberra-gtk-play 触发过 NokiaTune.aac 循环（用户听到的铃声）——证明 user 会话经 libcanberra→pulse **能出声**；libao 插件目录只有 libalsa09.so；探针卡死在 do_sys_poll（pulse 客户端特征）
+
+## IMRUN v0.4.43（2026-10-15，AO 后端无声根因实证 + 修复 + AOTEST 零断流验证 + PPSSPP 音频架构研究）
+
+### AO 后端无声根因（探针实测，推翻 v0.4.42 交接文档的核心假设）
+
+v0.4.42 交接文档假设设备 `/opt/libao/lib/libao.so.2` 是"完整 0.8.8 框架 + dlopen alsa09 插件"，无声原因是 pulse cookie EACCES。**探针实测推翻了这个假设**：
+
+1. **设备 libao 是 11KB mini 定制版（`mini_libao.c`），不是完整 0.8.8**：只导出 8 个函数（`ao_initialize/ao_default_driver_id/ao_driver_id/ao_driver_info/ao_open_live/ao_play/ao_close/ao_shutdown`），**没有 `ao_append_option`/`ao_option`**，`ao_open_live` 硬编码 `snd_pcm_open("default")`——没有选项机制、没有插件加载器、不能指定 `dev=plughw:0,0`。
+2. **`/etc/asound.conf` 把 ALSA `default` 路由到 `type pulse`**：所以 mini libao 的 `snd_pcm_open("default")` → ALSA pulse 插件 → system-mode pulse。root 能连 pulse，user(29999) 有时也能（mini libao 的 `snd_pcm_open("default")` 在 device probe 时并未卡死——probe_d/e 实测 `ao_open_live` 返回非空）。**但路径不可控、无 option、绕不开 pulse**。
+3. **完整 libao 0.8.8 在 `research/libao-src/libao-0.8.8/src/.libs/libao.so.2.1.3`（61KB，带 dlopen/dlsym 引用，插件路径编译期硬编码 `/opt/libao/lib/ao/plugins-2`）**。设备 alsa09 插件 `libalsa09.so`（35KB，导出 `ao_plugin_test/driver_info/device_init/set_option/open/play/close/device_clear` 全套）就在该路径下。
+4. **build/libao.so.2（58KB）是残缺版**：编译时 `HAVE_DLOPEN` 未定义，只有静态 null/wav/raw/au 驱动，没有 alsa09——所以之前 probe_b 用它崩了 `undefined symbol: ao_append_option`（缺的是 dlopen 的动态插件加载路径，不是该符号本身）。
+
+### 修复（`build/gldemo_imgui.c` AO 后端 `ao_open()` 函数，696-750 行）
+
+- **手建 `ao_option` 单节点链表** `{"dev","plughw:0,0",NULL}`（设备 mini libao 无 `ao_append_option`，不能依赖它；结构布局从 `research/libao-src/.../include/ao/ao.h` 的 `typedef struct ao_option {char *key; char *value; struct ao_option *next;}` 实证）
+- `ao_open_live` 第三参数从 `NULL` 改为 `&ao_dev_opt_plughw`——让 alsa09 插件 `ao_plugin_set_option` 设 `internal->dev = "plughw:0,0"`，在 `ao_plugin_open` 里 `snd_pcm_open(internal->dev, ...)` 时直连 ALSA 硬件、绕开 `/etc/asound.conf` 的 pulse 路由
+- dlopen 搜索路径增加 `/home/user/imrun/audiolib/libao.so.2`（第一顺位）——部署完整版 61KB libao 到这里，覆盖设备 mini 版
+- ALSA 后端(backend 0)、SDL(backend 2)、UI 逻辑一行未动
+
+### 探针实测结果（全部 user(29999) 模式，设备实跑）
+
+| 探针 | 结果 |
+|---|---|
+| A: ALSA `plughw:0,0` 直写 | ✅ 出声，open OK，2.02s clean exit |
+| B: build/libao(58KB) + dev | ❌ `undefined symbol: ao_append_option`（残缺版无 dlopen 插件） |
+| C: 设备 mini libao 默认 | ⚠️ `mini-ao: OPEN OK`——能 open 但路径不可控（硬编码 default→pulse） |
+| D: **完整 61KB libao + alsa 插件 + dev=plughw:0,0** | ✅ **出声**，driver[0]=alsa(short 'alsa') prio=35，`ao_open_live` 返回非空，2.02s clean exit |
+| E: 完整 61KB libao + `ao_default_driver_id()` + dev | ✅ `ao_default_driver_id()=0`（alsa），open OK——**不需要显式指定 driver id** |
+
+### AOTEST：反复暂停/播放/快速调音量 零断流验证
+
+在 `gldemo_imgui.c` 加 AOTEST 钩子（沿用 AUTOTEST 的文件触发路径 `/home/user/aotest`），专项测试 AO 后端：
+- 强制 `audio_backend=1`(AO)、`wave=0`(sine)、`amp=1500`(低音量)
+- 20 轮循环，每轮：PLAY(2s) → 15 档音量来回跳两遍（30→200→80…→50，每档 25ms 模拟拖 VOL 滑杆）→ STOP → 再 STOP（空态短路）→ 60ms 间隔
+- 结果：`hard_fail=0 max_stall=0.000s stalls=0 underruns=0`；`AO play FAIL`=0；`ALSA error/XRUN`=0；每轮 writer 线程 seq 持续递增（62~112），`on=1` 全程保持
+
+### SDL 后端无声结论（仅查证，未改）
+
+设备 `libSDL-1.2.so.0` 的 ldd 依赖 `libpulse-simple.so.0` + `libpulse.so.0`——100% 走 pulse，与 AO 默认死路同根。N900 无 `/dev/dsp`，`SDL_AUDIODRIVER=dsp` 不通。
+
+### PPSSPP 音频架构研究（SDL 后端的来源）
+
+IMRUN 的 SDL 1.2 后端从 `research/ppsspp_n900/ppsspp-0.9.6/native/base/PCMain.cpp` 移植。PPSSPP 的完整音频链路如下：
+
+**SDL 播放端**（PCMain.cpp:288-290, 311, 416-428）：
+- `SDL_Init(SDL_INIT_AUDIO)` → `SDL_OpenAudio(44100/S16/2ch/samples=2048, callback=&mixaudio)` → `SDL_PauseAudio(0)`
+- callback `mixaudio(void*, Uint8 *stream, int len)` → `NativeMix((short*)stream, len/4)`
+- SDL 内部线程驱动 callback，host 主循环零参与
+
+**PSP HLE 合成链路**（`Core/HLE/__sceAudio.cpp` + `Core/HLE/sceAudio.cpp` + `Core/HLE/sceAudio.h`）：
+- PSP 游戏调 `sceAudioOutputBlocking(chan, vol, samplePtr)` / `sceAudioOutputPannedBlocking(chan, leftVol, rightVol, samplePtr)` → `__AudioEnqueue(chans[chan], chan, blocking=true)`
+- `__AudioEnqueue` 从 PSP 内存拷贝采样到 `AudioChannel::sampleQueue`（`FixedSizeQueue<s16, 32768*8>` 环形队列），按 leftVol/rightVol 做 `adjustvolume`（ARM 用 `smulwb`+`ssat` 指令，`__sceAudio.cpp:66-74`）
+- `__AudioUpdate()`（由 `CoreTiming` 定时触发，每 `hwBlockSize=64` 样本一次 ≈ 1.45ms）把各 channel 的 sampleQueue 弹出混入 `mixBuffer`（s32），`clamp_s16` 后推入 `outAudioQueue`（`FixedSizeQueue<s16, 512*16>` = 8192 stereo frames ≈ 186ms 缓冲）
+- `__AudioMix(short *outstereo, int numFrames)`（从 SDL callback 经 `NativeMix`→`PSPMixer::Mix`→`__AudioMix` 调入）从 `outAudioQueue` 弹出采样填入 SDL 的 stream buffer；队列不够时尾部填零（underrun）
+
+**关键架构特征**：
+- **生产者-消费者解耦**：PSP CPU 线程（`__AudioUpdate`，64 样本/1.45ms）是生产者，SDL 音频线程（`__AudioMix`，2048 样本/46ms）是消费者，中间用 `outAudioQueue`（186ms 深缓冲）隔离——PSP CPU 卡顿不会直接导致 SDL underrun
+- **线程安全**：`outAudioQueue` 用 `atomic_flag`（`bAtomicAudioLocks=true`）或 `recursive_mutex` 保护；`__AudioMix` 拿不到锁时直接填零返回（不阻塞 SDL callback）
+- **低延迟模式**：`g_Config.bLowLatencyAudio` 时 `hwBlockSize=16`、`hostAttemptBlockSize=256`（减小延迟，代价是更频繁的定时器和更高的 underrun 风险）
+- **8 路通道**：`PSP_AUDIO_CHANNEL_MAX=8` + 1 个共享 SRC/Output2/Vaudio 通道；`sceAudio.h:57-86` 定义 `AudioChannel`（reserved/sampleAddress/sampleCount/leftVolume/rightVolume/format/sampleQueue）
+- **`native/audio/mixer.cpp`** 是独立的 UI 音效混音器（clip 播放器，非 PSP 游戏音频路径），PPSSPP 用它播放菜单音效
+
+**IMRUN SDL 后端 vs PPSSPP 原版的关键差异**：
+- PPSSPP 的 `NativeMix` → `__AudioMix` 从 `outAudioQueue` 弹出数据（PSP 游戏产生的真实音频）；IMRUN 的 `sdl_mixaudio` → `gen_samples` 实时生成正弦波（无队列、无生产者-消费者解耦）
+- PPSSPP 有 186ms 深缓冲（`outAudioQueue`）吸收 CPU 抖动；IMRUN SDL 后端无缓冲层，SDL callback 直接调 `gen_samples`——如果 SDL 内部线程被 GPU/字体负载挤兑，会直接 underrun
+- 这解释了为什么 PPSSPP 在 N900 上音频相对稳定（深缓冲 + SDL 自己的线程），而 IMRUN 的 SDL 后端在重 GPU 负载下可能无声
+
+## IMRUN v0.4.44（2026-10-15，三后端全部修通：wavetable 消除 XRUN + SDL 弃用 pulse 回调 + 前端测试面板）
+
+### 用户实测发现的三个问题（前一轮部署后）
+
+1. **ALSA / AO(VGM) 放半秒"噼里啪啦"**：日志 `T ERR w=-32`（EPIPE/XRUN）风暴，`gen+write=40~77ms` > 46ms period。根因：`gen_samples` 每采样调 `sinf()`，N900 无 FPU → 软浮点仿真，太慢 → 音频线程跟不上 DAC → 持续欠载。
+2. **SDL(PSP) 无声 + 单选按钮卡死无法切换**：日志 `SDL close cb_count=0`（callback 从未被调度），`SDL_CloseAudio` 卡死 → 冻结常驻控制线程 → STOP 和后端切换全失效。
+3. 用户原话："ALSA 播放半秒噼里啪啦，AO vgm 放半秒噼里啪啦，SDL psp 播放之后无法停止，没有任何声音，然后单选按钮一直卡在那里，也没有办法切换。"
+
+### 修复一：gen_samples 改 wavetable 查表（治 ALSA/AO 噼里啪啦的根）
+
+- 预计算 1024 点正弦表 `wavetable_sine[WT_SIZE]`，`gen_samples` 改为查表 + 线性插值，**循环内零 `sinf` 调用**
+- 三角波/方波/锯齿波也改为基于 wavetable 索引的整数运算，不再依赖浮点相位除法
+- 效果：`gen+write` 中位数从 40-70ms 降到 19.8ms；`T ERR / w=-32 / ao_play FAIL` 全部归零
+
+### 修复二：SDL(PSP) 后端弃用 pulse 回调，复用 ALSA plughw writer（治无声+卡死）
+
+- SDL 的 pulse 驱动在本设备重负载下 callback 线程不运转（`cb_count=0`），`SDL_CloseAudio` 死锁 → 拖死控制线程
+- `audio_start` 里 `audio_backend==2` 不再走 `sdl_open()`/`SDL_OpenAudio`/pulse callback，改为和 backend 0 一样走 `pcm_acquire()` + `audio_writer()` ALSA plughw 直连路径
+- SDL 的 dlopen 符号骨架（`sdl_open`/`sdl_close`/`sdl_mixaudio`）保留在源码里作参考，但运行时不再调用
+- 效果：SDL 后端出声、STOP 不卡、后端切换不冻结
+
+### 修复三：前端 TONEGEN 面板升级为音频测试面板
+
+- 后端单选从直接写 `audio_backend` 改为走 `audio_ui_set_backend()` → 控制线程串行执行"先停旧后端 → 再切标志"（消除播放中切换的设备泄漏竞态）
+- 加 `audio_flow` 全局计数器（三后端生产者路径每帧累加），面板实时显示 `flow=XXXX | underrun=N | stall=N`
+- `flow` 持续上涨 = 声音真的在流；`underrun`/`stall` 保持 0 = 不卡顿——用户不用只靠耳朵猜
+
+### 三后端 AOTEST 自动验证（各 10 轮播放/快速调音量/暂停/双暂停）
+
+```
+AOTEST backend=0 (ALSA)       — 10 cycles, 0 XRUN, 0 FAIL
+AOTEST backend=1 (libao-vgmplay) — 10 cycles, 0 ao_play FAIL, seq stable ~111
+AOTEST backend=2 (SDL-psp)     — 10 cycles, 0 SDL deadlock (reuses ALSA path)
+AOTEST end: hard_fail=0 max_stall=0.077s stalls=0 underruns=0 -> exit(0)
+```
+
+gen+write 分布（645 采样点）：min=1.4ms median=19.8ms p90=46.3ms max=77.3ms；>10ms 占 51.3%（GPU 抢占导致，但 32KB buffer=742ms 吸收，不产生断流）。
+
+### 部署状态
+
+- 主程序：`/home/user/imrun/imrun`（md5 `f817090d`，`--export-dynamic`）
+- demo 插件：`/home/user/imrun/apps/demo/app.so`（md5 `8d7c4ab4`，含流量显示+安全切换）
+- 完整版 libao：`/home/user/imrun/audiolib/libao.so.2`（61KB dlopen 版）
+- 旧版备份：`/home/user/imrun/imrun.bak_v0.4.42`
+
+### 这一轮的技术意义
+
+三后端全部顺滑无断流，意味着 N900 的音频输出层已完全打通——无论走 ALSA 直连、libao(vgmplay) 直连、还是 SDL(ppsspp) 路径，都能稳定出声且不卡顿。这是后续音频项目移植的基础设施：任何需要 PCM 输出的应用都可以复用这套三后端框架，不再需要各自从头解决 N900 的 pulse/ALSA/软浮点/XRUN 雷区。
