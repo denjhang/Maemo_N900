@@ -545,3 +545,10 @@
 - 后端切换：TONEGEN 单选框 `ALSA / AO(vgmplay)`；AO 播放前释放 plughw 常驻持有（pulse 需要拿回 hw），切回 ALSA 时 pcm_acquire() 重取
 - 收敛 gen_samples() 公共生成器（两后端同一样本）；audio_on 补 truthful 置位（历史遗留从未置 1）
 - ALSA 路径一行未动（v0.4.37 逐字节等价行为）
+
+## IMRUN v0.4.41（2026-10-15，第三音频后端：SDL 1.2，完整移植 ppsspp-n900）
+- 二进制 md5: c0b170622078882d93fe9910aea3125b；demo.so a2bbc3b05714846d310e3bcb9a6092dd
+- **PPSSPP-N900 真实后端**（native/base/PCMain.cpp）：SDL_Init(SDL_INIT_AUDIO) → SDL_OpenAudio(44100/S16/2ch/samples=2048, callback=mixaudio→NativeMix) → SDL_PauseAudio(0)。SDL 内部线程节奏控制；本机 /usr/lib/libSDL-1.2.so.0
+- **移植**：运行时 dlopen libSDL-1.2.so.0（SDL_Init/SDL_OpenAudio/SDL_PauseAudio/SDL_CloseAudio 逐符号），SDL_AudioSpec 布局自声明（不引 SDL 头）；callback `sdl_mixaudio` = `gen_samples(stream, len/4)`（= NativeMix 同形）；Stop = SDL_PauseAudio(1)+SDL_CloseAudio（SDL 自 join 内部线程，host 不 spawn）
+- 三后端互切互斥：启动任一后端前释放另外两个的设备（plughw 常持/libao dev/SDL audio）
+- TONEGEN 三单选：`ALSA / AO(vgmplay) / SDL(ppsspp)`

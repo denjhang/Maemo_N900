@@ -108,7 +108,7 @@ int dbg_key_events = 0;
 int g_wall_mode = 0, g_wall_variant = 0;
 int audio_volume = 100;
 int audio_wave = 0; /* 0 sine 1 tri 2 square 3 saw */ /* 0..1000 software gain (100=unity); >320 clamps hard, >1000 undefined */
-int audio_backend = 0; /* 0=ALSA plughw (current) 1=OSS /dev/dsp (vgmplay-maemo) */
+int audio_backend = 0; /* 0=ALSA plughw (current) 1=libao (vgmplay) 2=SDL (ppsspp) */
 static float audio_phase;
 double audio_deadline = 0;
 double dbg_max_stall = 0;
@@ -731,6 +731,63 @@ static int ao_open(void) {
     alog("AO open_live dev=%p %s", ao_dev, ao_dev ? "OK" : "FAIL");
     return ao_dev != NULL;
 }
+/* ================= SDL 1.2 audio backend (ported from ppsspp-n900) ========
+   PPSSPP native/base/PCMain.cpp, verbatim: SDL_Init(AUDIO) ->
+   SDL_OpenAudio(44100/S16/2ch/samples=2048, callback) -> SDL_PauseAudio(0).
+   SDL's internal thread paces the callback; on Maemo SDL's audio driver
+   talks to the same pulse layer. mixaudio = NativeMix analog = gen_samples. */
+static void gen_samples(short *dst, int n);   /* fwd: def sits below */
+typedef struct { int freq; unsigned short format; unsigned char channels,
+                 silence; unsigned short samples; unsigned int size;
+                 void (*callback)(void *, unsigned char *, int);
+                 void *userdata; } SDL_AudioSpec_t;
+static void *hSDL;
+static int (*SDL_Init_fn)(unsigned);
+static int (*SDL_OpenAudio_fn)(SDL_AudioSpec_t *, SDL_AudioSpec_t *);
+static void (*SDL_PauseAudio_fn)(int);
+static void (*SDL_CloseAudio_fn)(void);
+static int sdl_audio_open;
+static void sdl_mixaudio(void *userdata, unsigned char *stream, int len) {
+    (void)userdata;
+    gen_samples((short *)stream, len / 4);   /* == NativeMix(stream, len/4) */
+}
+static int sdl_open(void) {
+    if (!hSDL) {
+        hSDL = dlopen("libSDL-1.2.so.0", 2 /*RTLD_NOW*/);
+        if (!hSDL) { alog("SDL: libSDL-1.2.so.0 not found"); return 0; }
+        SDL_Init_fn = dlsym(hSDL, "SDL_Init");
+        SDL_OpenAudio_fn = dlsym(hSDL, "SDL_OpenAudio");
+        SDL_PauseAudio_fn = dlsym(hSDL, "SDL_PauseAudio");
+        SDL_CloseAudio_fn = dlsym(hSDL, "SDL_CloseAudio");
+        if (!SDL_Init_fn || !SDL_OpenAudio_fn || !SDL_PauseAudio_fn ||
+            !SDL_CloseAudio_fn) { alog("SDL: missing symbols"); hSDL = NULL; return 0; }
+    }
+    if (SDL_Init_fn(0x10 /*SDL_INIT_AUDIO*/) < 0) {
+        alog("SDL_Init AUDIO fail"); return 0;
+    }
+    SDL_AudioSpec_t fmt;
+    fmt.freq = 44100;
+    fmt.format = 0x8010 /*AUDIO_S16SYS*/;
+    fmt.channels = 2;
+    fmt.samples = 2048;
+    fmt.callback = &sdl_mixaudio;
+    fmt.userdata = (void *)0;
+    if (SDL_OpenAudio_fn(&fmt, NULL) < 0) {
+        alog("SDL_OpenAudio fail"); return 0;
+    }
+    /* Audio must be unpaused after init (PPSSPP comment, kept) */
+    SDL_PauseAudio_fn(0);
+    sdl_audio_open = 1;
+    alog("SDL audio opened 44100/S16/2ch/2048");
+    return 1;
+}
+static void sdl_close(void) {
+    if (!sdl_audio_open) return;
+    SDL_PauseAudio_fn(1);
+    SDL_CloseAudio_fn();
+    sdl_audio_open = 0;
+    alog("SDL audio closed");
+}
 /* shared tone generator (both backends render the same samples) */
 static void gen_samples(short *dst, int n) {
     for (int i = 0; i < n; i++) {
@@ -845,10 +902,23 @@ static int pcm_acquire(void) {
 }
 int audio_start(int seconds) {
     if (!pthread_create_fn) return 0;
+    if (audio_backend == 2) {
+        /* PPSSPP path: SDL runs its own audio thread - we spawn nothing */
+        if (pcm) { snd_pcm_close(pcm); pcm = NULL; alog("SDL: alsa hold released"); }
+        if (ao_dev) { if (ao_close_fn) ao_close_fn(ao_dev); ao_dev = NULL; }
+        if (!sdl_audio_open && !sdl_open()) return 0;
+        alog("S SDL START req=%ds", seconds);
+        audio_phase = 0;
+        audio_deadline = seconds ? now() + seconds : 0;
+        audio_on = 1;
+        return 1;
+    }
     if (audio_backend == 1) {
         /* libao backend: release the ALSA hw hold so the ao server path
            (pulse on this device) can wake up and take the card */
         if (pcm) { snd_pcm_close(pcm); pcm = NULL; alog("AO: alsa hold released"); }
+        if (ao_dev) { if (ao_close_fn) ao_close_fn(ao_dev); ao_dev = NULL; }
+        sdl_close();   /* leaving SDL backend? its device must not linger */
         if (!ao_dev && !ao_open()) return 0;
         alog("S AO START req=%ds", seconds);
         audio_phase = 0;
@@ -863,6 +933,7 @@ int audio_start(int seconds) {
     }
     if (!pcm) pcm_acquire();   /* returning from AO backend: take hw back */
     if (!pcm) return 0;
+    sdl_close();   /* leaving SDL backend? its device must not linger */
     alog("S START req=%ds state=%d avail=%ld was_run=%d", seconds,
          snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1,
          snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L, thread_run);
@@ -886,6 +957,15 @@ int audio_start(int seconds) {
 
 void audio_stop_full(void) {
     double t0 = now();
+    if (audio_backend == 2 && sdl_audio_open) {
+        /* pause + close: SDL joins its own thread internally */
+        thread_run = 0;
+        sdl_close();
+        alog("P sdl stop in %.1fms", (now() - t0) * 1000.0);
+        audio_deadline = 0;
+        audio_on = 0;
+        return;
+    }
     if (audio_backend == 1 && ao_dev) {
         /* join is fast: ao_play hands bytes to the server-side queue and
            returns - the server does the pacing, nothing blocks for long */
