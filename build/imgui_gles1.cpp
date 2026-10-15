@@ -1099,18 +1099,35 @@ void igui_build_ui(double t, float fps) {
                 for (int q = 0; q < grp_cnt; q++) if (grp_node[q] == nid) g = q;
                 if (g < 0 && grp_cnt < 8) {
                     g = grp_cnt++; grp_node[g] = nid; grp_n[g] = 0; grp_sel[g] = -1;
-                    /* the group's selected tab (VisibleWindow, or SelectedTabId
-                       while the node is hidden) - NOT g_focus, which flaps
-                       during minimize/restore fades and made the chip label
-                       change on every transition */
+                    /* Per-node CACHE of the selected-tab member. The node's live
+                       selection (VisibleWindow/TabBar->SelectedTabId) is only
+                       reliable while the group is visible: it goes NULL when the
+                       TabBar is removed (all members minimized, imgui.cpp:18848)
+                       and follows FOCUS member-by-member during restore rebind.
+                       The node itself survives the whole cycle (keep-ref keeps
+                       window->DockId == node->ID), so node_id is a stable cache
+                       key: update on valid reads, reuse while NULL/flapping. */
+                    static int c_nid[8] = {0};
+                    static int c_sel[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+                    int ci = -1;
+                    for (int q = 0; q < 8; q++) if (c_nid[q] == nid) { ci = q; break; }
+                    if (ci < 0)
+                        for (int q = 0; q < 8; q++)
+                            if (!c_nid[q]) { ci = q; c_nid[q] = nid; c_sel[q] = -1; break; }
+                    if (ci >= 0 && c_sel[ci] >= 0 && c_sel[ci] < g_dyn_n
+                        && !g_dyn[c_sel[ci]].open)
+                        c_sel[ci] = -1;   /* cached app was closed: re-resolve */
+                    if (ci >= 0) grp_sel[g] = c_sel[ci];
                     extern const char *ImGui_DockNodeSelectedName(int);
                     const char *vn = ImGui_DockNodeSelectedName(nid);
                     if (vn) {
                         const char *h = strstr(vn, "###dyn");
                         if (h) {
                             int vi = atoi(h + 6);
-                            for (int q = 0; q < g_dyn_n; q++)
-                                if (q == vi) { grp_sel[g] = vi; break; }
+                            if (vi >= 0 && vi < g_dyn_n && g_dyn[vi].open) {
+                                grp_sel[g] = vi;
+                                if (ci >= 0) c_sel[ci] = vi;
+                            }
                         }
                     }
                 }

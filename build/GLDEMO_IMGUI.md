@@ -509,3 +509,12 @@
 - 二进制 md5: ce36eb331778efd53897d2f90ec8b957（/home/user/imrun/imrun）
 - **仍变动的机制**：胶囊 sel 优先取 g_focus，而 g_focus 在过渡期天然跳动——①最小化淡出的 0.5s 内，淡出窗口仍是 NavWindow，shell 每帧把它写成 g_focus，淡完置 -1（sel 回落到 mem[0]）；②恢复淡入时 ImGui 在 DockNodeUpdateTabBar 里 FocusWindow(SelectedTabId 窗口) 又换人。标签跟随焦点 → 每次过渡必闪
 - **修法**：核心导出 `ImGui_DockNodeSelectedName(node_id)`（VisibleWindow，节点隐藏时回退 TabBar 的 SelectedTabId——两者都不随焦点动画变化）；分组时为每组算出稳定的 grp_sel，draw_chip 增加 sel_hint，组胶囊名称=选中标签成员。浮动单窗 chip 行为不变
+
+## IMRUN v0.4.37（2026-10-15，组胶囊名称最终修复：节点级选中标签缓存）
+- 二进制 md5: 74fe80e9865c6f387a984981b23fbe6e（/home/user/imrun/imrun）
+- **子智能体源码调查结论**（DockNodeRemoveWindow/BindNodeToWindow 全链验证）：
+  - T1 淡出中途：成员逐个 undock，VisibleWindow 被清（18838）、Tab 逐个删 → 选中名 NULL 或随剩余窗口变
+  - T2-T3 最小化停留：TabBar 整个被删（18848 `Windows.Size < threshold` → DockNodeRemoveTabBar）→ SelectedName 恒 NULL
+  - T4 恢复期间：TabBar 用 node->SelectedTabId 重建（18784）但每帧被焦点同步（19434/19699），成员逐个重绑时 VisibleWindow/SelectedTabId 跟着焦点逐窗口切
+  - 节点本身全程存活（keep-ref 保 window->DockId==node->ID，18850 不删）→ **node_id 是整个周期的稳定 key**
+- **修法**：按 node_id 缓存最近一次有效解析的选中成员下标；查询有效（VisibleWindow/SelectedTabId 存活）时更新缓存，NULL/跳变期沿用缓存；缓存指向的 app 关闭时作废重解析。名称只在用户真正切换标签时更新，淡出/隐藏/恢复全程冻结
