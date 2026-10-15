@@ -108,6 +108,7 @@ int dbg_key_events = 0;
 int g_wall_mode = 0, g_wall_variant = 0;
 int audio_volume = 100;
 int audio_wave = 0; /* 0 sine 1 tri 2 square 3 saw */ /* 0..1000 software gain (100=unity); >320 clamps hard, >1000 undefined */
+int audio_backend = 0; /* 0=ALSA plughw (current) 1=OSS /dev/dsp (vgmplay-maemo) */
 static float audio_phase;
 double audio_deadline = 0;
 double dbg_max_stall = 0;
@@ -692,10 +693,84 @@ int pcm_resetup(void) {
     return er;
 }
 
+/* ================= libao backend (ported from vgmplay-maemo) ==============
+   vgmplay-maemo builds with USE_LIBAO=1: ao_open_live(default driver) +
+   blocking ao_play. On this device that lands on pulseaudio, whose internal
+   queue is ~seconds deep - that is WHY whole tracks played without a hiccup
+   while our direct plughw path XRUNs on every UI stall. Verbatim call
+   sequence, runtime dlopen (zero link-time deps). */
+typedef struct { int bits; int rate; int channels; int byte_format; } ao_fmt_t;
+static void *hAO;
+static int (*ao_initialize_fn)(void);
+static int (*ao_default_driver_id_fn)(void);
+static void *(*ao_open_live_fn)(int, ao_fmt_t *, void *);
+static int (*ao_play_fn)(void *, char *, unsigned int);
+static void (*ao_close_fn)(void *);
+static void *ao_dev;
+static int ao_open(void) {
+    if (!hAO) {
+        static const char *libs[] = { "/opt/libao/lib/libao.so.2", "libao.so.2",
+                                      "/usr/lib/libao.so.2",
+                                      "/home/user/imrun/lib/libao.so.2", NULL };
+        for (int i = 0; libs[i] && !hAO; i++)
+            hAO = dlopen(libs[i], 2 /*RTLD_NOW*/);
+        if (!hAO) { alog("AO: libao.so.2 not found"); return 0; }
+        ao_initialize_fn = dlsym(hAO, "ao_initialize");
+        ao_default_driver_id_fn = dlsym(hAO, "ao_default_driver_id");
+        ao_open_live_fn = dlsym(hAO, "ao_open_live");
+        ao_play_fn = dlsym(hAO, "ao_play");
+        ao_close_fn = dlsym(hAO, "ao_close");
+        if (!ao_initialize_fn || !ao_default_driver_id_fn || !ao_open_live_fn ||
+            !ao_play_fn || !ao_close_fn) {
+            alog("AO: missing symbols"); hAO = NULL; return 0;
+        }
+        ao_initialize_fn();
+    }
+    ao_fmt_t fmt = { 16, 44100, 2, 4 /*AO_FMT_NATIVE little-endian*/ };
+    ao_dev = ao_open_live_fn(ao_default_driver_id_fn(), &fmt, NULL);
+    alog("AO open_live dev=%p %s", ao_dev, ao_dev ? "OK" : "FAIL");
+    return ao_dev != NULL;
+}
+/* shared tone generator (both backends render the same samples) */
+static void gen_samples(short *dst, int n) {
+    for (int i = 0; i < n; i++) {
+        float ph = audio_phase / 6.2831853f; ph -= (float)(int)ph; /* 0..1 */
+        float w;
+        switch (audio_wave) {
+        case 1: w = ph < 0.5f ? ph * 4.0f - 1.0f : 3.0f - ph * 4.0f; break; /* triangle */
+        case 2: w = ph < 0.5f ? 1.0f : -1.0f; break;                        /* square */
+        case 3: w = ph * 2.0f - 1.0f; break;                                 /* saw */
+        default: w = sinf(audio_phase); break;                               /* sine */
+        }
+        float v = (float)audio_amp * (audio_volume / 100.0f) * w;
+        short s = (short)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+        dst[i * 2] = s;
+        dst[i * 2 + 1] = s;
+        audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
+    }
+}
+
 /* SDL-callback-style: dedicated writer thread drains a ring buffer, so UI
    frame hiccups can never underrun the device (PPSSPP/deadbeef pattern) */
 static void *audio_writer(void *arg) {
     (void)arg;
+    if (audio_backend == 1) {
+        /* vgmplay-maemo path: blocking ao_play, the server-side queue does
+           ALL the buffering. Zero error recovery (vgmplay has none). */
+        short frag[512 * 2];
+        unsigned long seq = 0;
+        while (thread_run) {
+            if (audio_deadline && now() > audio_deadline) break;
+            gen_samples(frag, 512);
+            if (!ao_play_fn(ao_dev, (char *)frag, sizeof(frag))) {
+                alog("AO play FAIL seq=%lu", seq);
+                break;
+            }
+            seq++;
+        }
+        alog("T ao exit seq=%lu", seq);
+        return NULL;
+    }
     short chunk[PERIOD * 2];
     /* generator lives IN the writer thread: UI can stall forever,
        audio never notices (deadbeef output-thread pattern) */
@@ -719,21 +794,7 @@ static void *audio_writer(void *arg) {
             thread_run = 0; audio_on = 0;   /* truthful state for UI */
             break;
         }
-        for (unsigned i = 0; i < PERIOD; i++) {
-            float ph = audio_phase / 6.2831853f; ph -= (float)(int)ph; /* 0..1 */
-            float w;
-            switch (audio_wave) {
-            case 1: w = ph < 0.5f ? ph * 4.0f - 1.0f : 3.0f - ph * 4.0f; break; /* triangle */
-            case 2: w = ph < 0.5f ? 1.0f : -1.0f; break;                        /* square */
-            case 3: w = ph * 2.0f - 1.0f; break;                                 /* saw */
-            default: w = sinf(audio_phase); break;                               /* sine */
-            }
-            float v = (float)audio_amp * (audio_volume / 100.0f) * w;
-            short s = (short)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
-            chunk[i * 2] = s;
-            chunk[i * 2 + 1] = s;
-            audio_phase += 2.0f * 3.14159265f * 440.0f / 44100.0f;
-        }
+        gen_samples(chunk, PERIOD);
         long w = snd_pcm_writei(pcm, chunk, PERIOD);
         long done = 0;
         while (w > 0 && done + w < PERIOD) {
@@ -765,8 +826,43 @@ static void *audio_writer(void *arg) {
 }
 
 void audio_stop_full(void);
+/* (re)acquire the ALSA hw hold - boot, and every time we come back from
+   the OSS backend which had to release it */
+static int pcm_acquire(void) {
+    if (pcm || !snd_pcm_open) return pcm != NULL;
+    if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
+        int er = pcm_resetup();
+        printf("AUDIO: hw held (%s)\n", er ? "PARAMS FAIL" : "OK");
+        return 1;
+    }
+    if (snd_pcm_open(&pcm, "default", 0, 0) == 0) {
+        snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 1000000);
+        printf("AUDIO: via pulse default (hw busy)\n");
+        return 1;
+    }
+    printf("AUDIO: no device\n");
+    return 0;
+}
 int audio_start(int seconds) {
-    if (!pcm || !pthread_create_fn) return 0;
+    if (!pthread_create_fn) return 0;
+    if (audio_backend == 1) {
+        /* libao backend: release the ALSA hw hold so the ao server path
+           (pulse on this device) can wake up and take the card */
+        if (pcm) { snd_pcm_close(pcm); pcm = NULL; alog("AO: alsa hold released"); }
+        if (!ao_dev && !ao_open()) return 0;
+        alog("S AO START req=%ds", seconds);
+        audio_phase = 0;
+        audio_deadline = seconds ? now() + seconds : 0;
+        thread_run = 1;
+        if (pthread_create_fn(&audio_tid, NULL, audio_writer, NULL) != 0) {
+            thread_run = 0;
+            return 0;
+        }
+        audio_on = 1;
+        return 1;
+    }
+    if (!pcm) pcm_acquire();   /* returning from AO backend: take hw back */
+    if (!pcm) return 0;
     alog("S START req=%ds state=%d avail=%ld was_run=%d", seconds,
          snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1,
          snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L, thread_run);
@@ -784,11 +880,24 @@ int audio_start(int seconds) {
         return 0;
     }
     alog("S spawned");
+    audio_on = 1;
     return 1;
 }
 
 void audio_stop_full(void) {
     double t0 = now();
+    if (audio_backend == 1 && ao_dev) {
+        /* join is fast: ao_play hands bytes to the server-side queue and
+           returns - the server does the pacing, nothing blocks for long */
+        thread_run = 0;
+        if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
+        if (ao_close_fn) ao_close_fn(ao_dev);
+        ao_dev = NULL;
+        alog("P ao stop in %.1fms", (now() - t0) * 1000.0);
+        audio_deadline = 0;
+        audio_on = 0;
+        return;
+    }
     alog("P STOP entry run=%d state=%d avail=%ld", thread_run,
          snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1,
          snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L);
@@ -954,24 +1063,14 @@ int main(void) {
     }
     if (init_gfx(W, H)) return 1;
     if (pXSetErrorHandler) pXSetErrorHandler(imrun_xerror, NULL);
-    /* grab the sound card ONCE, hold for entire app lifetime - pulse is
-       on-demand (module-suspend-idle): after idle it releases hw, we take
-       it and never let go. No open/close racing, no EBUSY intermittency. */
-    if (snd_pcm_open) {
-        if (snd_pcm_open(&pcm, "plughw:0,0", 0 /*PLAYBACK*/, 0) == 0) {
-            int er = pcm_resetup();
-            printf("AUDIO: hw held from startup (%s)\n", er ? "PARAMS FAIL" : "OK");
-        } else if (snd_pcm_open(&pcm, "default", 0, 0) == 0) {
-            snd_pcm_set_params(pcm, 2, 3, 2, 44100, 1, 1000000);
-            printf("AUDIO: via pulse default (hw busy at boot)\n");
-        } else {
-            printf("AUDIO: no device\n");
-        }
-    }
+    /* grab the sound card ONCE, hold until the OSS backend needs the hw -
+       pulse is on-demand (module-suspend-idle): after idle it releases hw,
+       we take it and never let go. No open/close racing, no EBUSY. */
+    pcm_acquire();
 
-
-    /* resident audio-control thread: PLAY/STOP buttons only set flags */
-    if (pthread_create_fn && pcm)
+    /* resident audio-control thread: PLAY/STOP buttons only set flags
+       (spawn even without pcm: the OSS backend needs no ALSA handle) */
+    if (pthread_create_fn)
         pthread_create_fn(&audio_ctl_tid, NULL, audio_ctl, NULL);
     /* battery monitor thread (forks hal-get-property, never in UI thread) */
     if (pthread_create_fn) {

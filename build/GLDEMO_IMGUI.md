@@ -537,3 +537,11 @@
 - 二进制 md5: 74fe80e9865c6f387a984981b23fbe6e（= v0.4.37，逐字节一致，回退干净）；demo.so 03d1954e488b4741498d9c2a39979b6d（恢复直切波形）
 - 用户实测 v0.4.38：响 0.5 秒即无声（严重倒退）→ SCHED_RR/resetup/gain_eff 三项改动全部撤销，恢复 v0.4.37 音频路径
 - XRUN 风暴（223 条 -EPIPE 日志）的原始分析保留在 v0.4.38 条目；后续重修需先在设备上复现并采到 0.5s 无声的日志证据再动手，不再凭推理直接改
+
+## IMRUN v0.4.40（2026-10-15，第二音频后端：libao，完整移植 vgmplay-maemo）
+- 二进制 md5: 29bed92bca611cec598c3206deee58b4；demo.so fa0809c7c67b5e4a4005da5d68d53246
+- **调查更正**：vgmplay-maemo 的 Makefile 默认 `USE_LIBAO=1`——它在设备上的真实后端是 **libao**（ao_open_live + 阻塞 ao_play），落在 pulseaudio（服务端秒级内部队列），不是 OSS /dev/dsp（本机不存在该设备节点）；libao 实体在 /opt/libao/lib/libao.so.2
+- **移植方式**（用户指示：完整拿过来 + 单选框可选）：运行时 dlopen libao.so.2（搜索序：/opt/libao/lib → SONAME → /usr/lib → imrun/lib），逐符号 ao_initialize/ao_default_driver_id/ao_open_live/ao_play/ao_close，调用序列与 vgmplay Stream.c 一致；writer 线程 512 帧×2ch 阻塞 ao_play，**零错误恢复代码**（vgmplay 同款）
+- 后端切换：TONEGEN 单选框 `ALSA / AO(vgmplay)`；AO 播放前释放 plughw 常驻持有（pulse 需要拿回 hw），切回 ALSA 时 pcm_acquire() 重取
+- 收敛 gen_samples() 公共生成器（两后端同一样本）；audio_on 补 truthful 置位（历史遗留从未置 1）
+- ALSA 路径一行未动（v0.4.37 逐字节等价行为）
