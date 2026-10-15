@@ -518,3 +518,8 @@
   - T4 恢复期间：TabBar 用 node->SelectedTabId 重建（18784）但每帧被焦点同步（19434/19699），成员逐个重绑时 VisibleWindow/SelectedTabId 跟着焦点逐窗口切
   - 节点本身全程存活（keep-ref 保 window->DockId==node->ID，18850 不删）→ **node_id 是整个周期的稳定 key**
 - **修法**：按 node_id 缓存最近一次有效解析的选中成员下标；查询有效（VisibleWindow/SelectedTabId 存活）时更新缓存，NULL/跳变期沿用缓存；缓存指向的 app 关闭时作废重解析。名称只在用户真正切换标签时更新，淡出/隐藏/恢复全程冻结
+
+## IMRUN v0.4.37 发布包（2026-10-15）
+- **发布包**：research/releases/imrun_release_v0.4.37.tar.gz（md5 9e7d792fd2731dcd7d76ce6ab7e58d8c）
+- 部署二进制 md5: 74fe80e9865c6f387a984981b23fbe6e（/home/user/imrun/imrun）
+- 内容：host 源码（gldemo_imgui.c / imgui_gles1.cpp）+ 补丁版 ImGui 核心 + 3 插件源（system/appmgr/demo）+ 构建脚本 + 桌面集成 packaging + 全套文档；版本线 v0.4.27→v0.4.37 完成组最小化原生重构 + 四动画统一顶点淡变 + 胶囊稳定化
