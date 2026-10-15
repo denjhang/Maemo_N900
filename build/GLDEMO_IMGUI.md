@@ -504,3 +504,8 @@
 - **用户线索**：成组→最小化→恢复后，任务栏组胶囊的名称在变动
 - **根因**：shell 的聚焦判定用 `IsWindowFocused(RootAndChildWindows)`——含 ChildWindows 语义"当前窗口是 NavWindow 的子孙"。当焦点落在**组 host 窗口**上（点标签栏空白处等），所有成员都是 host 的子孙 → 全员通过 → g_focus 被循环中最后一个成员（最高 di）抢走：胶囊 sel 跟着 g_focus 跳动（名称变动）；点 chip 的 foc 判定失真，该最小化时走了"仅聚焦"分支（偶发"丢"最小化动画）
 - 修法：改 `ImGuiFocusedFlags_None` 精确匹配（NavWindow==本窗口）——只有选中的标签页认领焦点
+
+## IMRUN v0.4.36（2026-10-15，组胶囊名称稳定化：跟随选中标签而非焦点）
+- 二进制 md5: ce36eb331778efd53897d2f90ec8b957（/home/user/imrun/imrun）
+- **仍变动的机制**：胶囊 sel 优先取 g_focus，而 g_focus 在过渡期天然跳动——①最小化淡出的 0.5s 内，淡出窗口仍是 NavWindow，shell 每帧把它写成 g_focus，淡完置 -1（sel 回落到 mem[0]）；②恢复淡入时 ImGui 在 DockNodeUpdateTabBar 里 FocusWindow(SelectedTabId 窗口) 又换人。标签跟随焦点 → 每次过渡必闪
+- **修法**：核心导出 `ImGui_DockNodeSelectedName(node_id)`（VisibleWindow，节点隐藏时回退 TabBar 的 SelectedTabId——两者都不随焦点动画变化）；分组时为每组算出稳定的 grp_sel，draw_chip 增加 sel_hint，组胶囊名称=选中标签成员。浮动单窗 chip 行为不变

@@ -1087,6 +1087,7 @@ void igui_build_ui(double t, float fps) {
             int grp_cnt = 0;
             int vis[8], vis_n = 0;
             static int grp_n[8] = {0};
+            int grp_sel[8];   /* STABLE label member = node's selected tab */
             for (int i = 0; i < g_dyn_n; i++) {
                 if (!g_dyn[i].open) continue;   /* mini included: restorable */
                 char tn[80];
@@ -1096,15 +1097,32 @@ void igui_build_ui(double t, float fps) {
                 if (nid == 0) { vis[vis_n++] = i; continue; }
                 int g = -1;
                 for (int q = 0; q < grp_cnt; q++) if (grp_node[q] == nid) g = q;
-                if (g < 0 && grp_cnt < 8) { g = grp_cnt++; grp_node[g] = nid; grp_n[g] = 0; }
+                if (g < 0 && grp_cnt < 8) {
+                    g = grp_cnt++; grp_node[g] = nid; grp_n[g] = 0; grp_sel[g] = -1;
+                    /* the group's selected tab (VisibleWindow, or SelectedTabId
+                       while the node is hidden) - NOT g_focus, which flaps
+                       during minimize/restore fades and made the chip label
+                       change on every transition */
+                    extern const char *ImGui_DockNodeSelectedName(int);
+                    const char *vn = ImGui_DockNodeSelectedName(nid);
+                    if (vn) {
+                        const char *h = strstr(vn, "###dyn");
+                        if (h) {
+                            int vi = atoi(h + 6);
+                            for (int q = 0; q < g_dyn_n; q++)
+                                if (q == vi) { grp_sel[g] = vi; break; }
+                        }
+                    }
+                }
                 if (g >= 0 && grp_n[g] < 8) grp_mem[g][grp_n[g]++] = i;
             }
             /* shared chip renderer: members[] + count; click = focus-all /
                minimize-all; long-press = close-all. Color per state with lerp. */
             static float chip_rgb[16][3];
-            auto draw_chip = [&](int *mem, int n, int uid, int node_id) {
+            auto draw_chip = [&](int *mem, int n, int uid, int node_id, int sel_hint) {
                 int sel = mem[0];
                 for (int q = 0; q < n; q++) if (mem[q] == g_focus) sel = g_focus;
+                if (sel_hint >= 0) sel = sel_hint;   /* groups: selected tab wins */
                 bool all_hidden = true;
                 for (int q = 0; q < n; q++)
                     if (!g_dyn[mem[q]].mini && !g_dyn[mem[q]].collapsed) all_hidden = false;
@@ -1158,12 +1176,12 @@ void igui_build_ui(double t, float fps) {
             /* floating chips */
             for (int q = 0; q < vis_n; q++) {
                 int i = vis[q];
-                draw_chip(&i, 1, i, 0);
+                draw_chip(&i, 1, i, 0, -1);
             }
             /* group chips: one per dock node */
             for (int g = 0; g < grp_cnt; g++) {
                 if (grp_n[g] == 0) continue;
-                draw_chip(grp_mem[g], grp_n[g], 100 + g, grp_node[g]);
+                draw_chip(grp_mem[g], grp_n[g], 100 + g, grp_node[g], grp_sel[g]);
             }
         }
         char bat[12] = "--", tmp[8] = "--", clk[8] = "--:--";

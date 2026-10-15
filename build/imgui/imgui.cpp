@@ -1428,6 +1428,20 @@ extern "C" void* ImGui_DockNodeHostDrawList(int node_id)
     if (node == NULL || node->HostWindow == NULL) return NULL;
     return node->HostWindow->DrawList;
 }
+// IMRUN: name of the group's SELECTED tab. Stable across minimize/restore
+// focus transitions (VisibleWindow, falling back to the tab bar's
+// SelectedTabId while the node is hidden) - unlike NavWindow-based focus,
+// which flaps during fade animations.
+extern "C" const char* ImGui_DockNodeSelectedName(int node_id)
+{
+    ImGuiDockNode* node = DockContextFindNodeByID(GImGui, (ImGuiID)node_id);
+    if (node == NULL) return NULL;
+    ImGuiWindow* w = node->VisibleWindow;
+    if (w == NULL && node->TabBar)
+        if (ImGuiTabItem* tab = TabBarFindTabByID(node->TabBar, node->TabBar->SelectedTabId))
+            w = tab->Window;
+    return w ? w->Name : NULL;
+}
 extern "C" bool ImGui_GetWindowPosByName(const char* name, float* x, float* y)
 {
     ImGuiWindow* w = FindWindowByName(name);
