@@ -108,6 +108,8 @@ int dbg_key_events = 0;
 int g_wall_mode = 0, g_wall_variant = 0;
 int audio_volume = 100;
 int audio_wave = 0; /* 0 sine 1 tri 2 square 3 saw */ /* 0..1000 software gain (100=unity); >320 clamps hard, >1000 undefined */
+static volatile int audio_fading;    /* stop/switch: writer fades gain to 0 */
+static volatile int audio_wave_req = -1; /* pending wave switch (applied at silence) */
 static float audio_phase;
 double audio_deadline = 0;
 double dbg_max_stall = 0;
@@ -696,10 +698,21 @@ int pcm_resetup(void) {
    frame hiccups can never underrun the device (PPSSPP/deadbeef pattern) */
 static void *audio_writer(void *arg) {
     (void)arg;
+    /* same SCHED_RR(15) as the GL thread: swap busy-wait spikes (measured up
+       to 78ms) were starving this thread past one period (46ms) = XRUN */
+    if (sched_setscheduler_fn) {
+        struct { int sched_priority; } sp = { 15 };
+        sched_setscheduler_fn(0, 2 /*SCHED_RR*/, &sp);
+    }
     short chunk[PERIOD * 2];
     /* generator lives IN the writer thread: UI can stall forever,
        audio never notices (deadbeef output-thread pattern) */
     unsigned long seq = 0;
+    /* smoothed effective gain - ONE envelope for everything:
+       fade-in from 0 (no start pop), volume-slider smoothing (no step-zipper),
+       stop fade-out (STOP ramps to silence BEFORE drop - no phase truncation),
+       wave-switch dip (square<->sine at full level = full-scale step) */
+    float gain_eff = 0.0f;
     double spawn_t = now();
     alog("T spawn tid=%lu", (unsigned long)arg);
     /* silence pad: DMA restart after drop+prepare has a broken-pointer window
@@ -716,8 +729,12 @@ static void *audio_writer(void *arg) {
     while (thread_run) {
         double t_before = now();
         if (audio_deadline && now() > audio_deadline) {
-            thread_run = 0; audio_on = 0;   /* truthful state for UI */
-            break;
+            audio_fading = 1;   /* fade out, don't hard-cut mid-phase */
+        }
+        /* wave switch is applied only at (near-)silence */
+        if (audio_wave_req >= 0 && audio_wave_req != audio_wave && gain_eff < 0.01f) {
+            audio_wave = audio_wave_req;
+            audio_wave_req = -1;
         }
         for (unsigned i = 0; i < PERIOD; i++) {
             float ph = audio_phase / 6.2831853f; ph -= (float)(int)ph; /* 0..1 */
@@ -728,7 +745,14 @@ static void *audio_writer(void *arg) {
             case 3: w = ph * 2.0f - 1.0f; break;                                 /* saw */
             default: w = sinf(audio_phase); break;                               /* sine */
             }
-            float v = (float)audio_amp * (audio_volume / 100.0f) * w;
+            int switching = audio_wave_req >= 0 && audio_wave_req != audio_wave;
+            float target = (audio_fading || switching) ? 0.0f : (audio_volume / 100.0f);
+            gain_eff += (target - gain_eff) * 0.004f;   /* ~6ms time constant */
+            if (audio_fading && gain_eff < 0.001f) {
+                gain_eff = 0.0f;
+                thread_run = 0;   /* silent: ctl thread's join returns instantly */
+            }
+            float v = (float)audio_amp * gain_eff * w;
             short s = (short)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
             chunk[i * 2] = s;
             chunk[i * 2 + 1] = s;
@@ -741,9 +765,18 @@ static void *audio_writer(void *arg) {
             w = snd_pcm_writei(pcm, chunk + done * 2, PERIOD - done);
         }
         if (w < 0 && snd_pcm_prepare) {
-            alog("T ERR seq=%lu w=%ld state=%d -> prepare", seq, w,
+            /* plain prepare does NOT recover an XRUN on this plughw (v9 lesson:
+               plug-layer/hw pointers desync) - it looped -EPIPE every period =
+               SECONDS of garbage. Full resetup + silence pad, same as stop. */
+            alog("T ERR seq=%lu w=%ld state=%d -> full resetup+pad", seq, w,
                  snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1);
+            pcm_resetup();
             snd_pcm_prepare(pcm);
+            {
+                static const short zeros[PERIOD * 2];
+                snd_pcm_writei(pcm, zeros, PERIOD);
+                snd_pcm_writei(pcm, zeros, PERIOD);
+            }
             w = snd_pcm_writei(pcm, chunk, PERIOD);
             if (w < 0) dbg_underruns++;
         }
@@ -760,6 +793,7 @@ static void *audio_writer(void *arg) {
             seq++;
         }
     }
+    if (audio_fading) { audio_on = 0; audio_deadline = 0; } /* deadline/self fade: sync UI state */
     alog("T exit seq=%lu", seq);
     return NULL;
 }
@@ -776,6 +810,8 @@ int audio_start(int seconds) {
          snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L,
          snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1);
     audio_phase = 0;
+    audio_fading = 0;      /* fresh start: envelope engaged from 0 (fade-in) */
+    audio_wave_req = -1;
     audio_deadline = seconds ? now() + seconds : 0;
     thread_run = 1;
     if (pthread_create_fn(&audio_tid, NULL, audio_writer, NULL) != 0) {
@@ -793,9 +829,19 @@ void audio_stop_full(void) {
          snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1,
          snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L);
     if (thread_run) {
-        thread_run = 0;
+        /* fade to silence BEFORE dropping: dropping mid-phase is a full-scale
+           step = the STOP crackle. Writer zeroes itself in ~10ms and clears
+           thread_run; join then returns immediately. 400ms fallback = hard cut */
+        audio_fading = 1;
+        int waited = 0;
+        while (thread_run && waited < 400) {
+            if (usleep_fn) usleep_fn(2000);
+            waited += 2;
+        }
+        if (thread_run) thread_run = 0;
         if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
-        alog("P joined in %.1fms", (now() - t0) * 1000.0);
+        audio_fading = 0;
+        alog("P joined in %.1fms (faded)", (now() - t0) * 1000.0);
     }
     if (pcm && snd_pcm_drop) {
         snd_pcm_drop(pcm); /* discard residual: instant silence, no stale replay */
@@ -818,6 +864,7 @@ static volatile int audio_cmd, audio_cmd_sec; /* 0 none, 1 start, 2 stop */
 void audio_ui_start(int seconds) { audio_cmd_sec = seconds; audio_cmd = 1; }
 void audio_ui_stop(void)         { audio_cmd = 2; }
 void imrun_audio_stop_all(void)     { audio_cmd = 2; } /* plugin-facing */
+void imrun_audio_wave(int w)     { audio_wave_req = w; } /* crackle-free switch */
 double imrun_now(void)             { return now(); } /* plugin clock (relative) */
 static void *audio_ctl(void *arg) {
     (void)arg;

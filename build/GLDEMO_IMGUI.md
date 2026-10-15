@@ -523,3 +523,12 @@
 - **发布包**：research/releases/imrun_release_v0.4.37.tar.gz（md5 9e7d792fd2731dcd7d76ce6ab7e58d8c）
 - 部署二进制 md5: 74fe80e9865c6f387a984981b23fbe6e（/home/user/imrun/imrun）
 - 内容：host 源码（gldemo_imgui.c / imgui_gles1.cpp）+ 补丁版 ImGui 核心 + 3 插件源（system/appmgr/demo）+ 构建脚本 + 桌面集成 packaging + 全套文档；版本线 v0.4.27→v0.4.37 完成组最小化原生重构 + 四动画统一顶点淡变 + 胶囊稳定化
+
+## IMRUN v0.4.38（2026-10-15，STOP/音量噼啪 = XRUN 风暴，非波形不连续）
+- 二进制 md5: 1b25f7a3ed7860ebd337c60fdbcf7da5；demo 插件 md5: d9b44d0d861c48ba7487d8d6d815f398
+- **用户纠正方向后子智能体+设备日志实锤**：audio_dbg.log 里 223 条 `T ERR w=-32 state=4`（-EPIPE/XRUN），聚簇于 STOP/音量操作时点，每簇持续数秒
+- **完整因果链**：UI 重绘（STOP 闪效/拖滑条）→ swap 峰值实测最高 78ms（PROF 日志）→ 600MHz 单核上音频 writer 线程被饿过 1 个 period（46ms）→ XRUN；错误恢复只做 plain prepare——v9 已证此 plug 层指针失同步后无效 → 每 period -EPIPE→prepare→重写→再 -EPIPE 循环 = **数秒垃圾声**
+- **修复（对症三层）**：
+  1. writer 线程自身 SCHED_RR(15)（与 GL 线程同级，swap 忙等不再饿死它——根因）
+  2. writer 错误路径改**完整 resetup + 2 period 静音垫**（v9 教训用于欠载路径）——即使再欠载也是一次干净短隙而非风暴
+  3. 顺带（不作为本 bug 主因但保留）：gain_eff 统一包络——启动淡入/音量滑条平滑/STOP 先淡出到静音再 drop/换波形在静音点切换（demo 的 WAVE Combo 改走 imrun_audio_wave）

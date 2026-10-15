@@ -20,6 +20,7 @@ void audio_ui_stop(void);
 extern int audio_on;
 extern double audio_deadline;
 extern int audio_volume, audio_wave;
+extern void imrun_audio_wave(int);
 void vibra_ping(int ms);
 void vibra_stop(void);
 extern char last_key[64];
@@ -92,7 +93,10 @@ extern "C" void imapp_frame(double t) {
         if (ImGui::Button("STOP", ImVec2(140, 48)))
             audio_ui_stop();
         const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
-        ImGui::Combo("WAVE", &audio_wave, waves, 4);
+        { int wsel = audio_wave;
+        if (ImGui::Combo("WAVE", &wsel, waves, 4))
+            imrun_audio_wave(wsel);  /* switch at silence: no full-scale step */
+        }
         ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
         ImGui::EndTabItem();
     }
