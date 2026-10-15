@@ -1,16 +1,17 @@
-# IMRUN 音频后端调查交接文档
+# IMRUN 音频后端调查交接文档 v2(给能力强的执行型智能体)
 
-> 给下一个 ZCode 窗口:本文档是 N900 IMRUN 三音频后端调查的全部已知事实。
-> 目标只有一个:**搞清楚 vgmplay-maemo 当年为什么随时打开都能顺畅播放,
-> 而我们逐行复刻它的调用序列却无声/卡死。** 不要凭推理改代码,每个结论要设备实证。
+> **你是执行型调查员,不是顾问。** 本文档给足了你全部已知事实和工具。
+> 你的产出必须是:①设备上跑通的三路探针实测结果;②一个改好的 IMRUN 后端补丁(经本窗口部署验证)。
+> 不许只写分析和建议然后停手。不许在设备上留下任何循环发声的进程。不许动 ALSA 后端和 UI 的既有行为。
 
-## 设备访问
+## 一、任务一句话
 
-- N900 Maemo Fremantle,`192.168.101.108`,root/123456
-- SSH CLI 需要 legacy 算法(`-oHostKeyAlgorithms=+ssh-rsa -oPubkeyAcceptedAlgorithms=+ssh-rsa -oStrictHostKeyChecking=no`),
-  **推荐直接用 python + paramiko**(模板见下);前台可能挂住的命令会超时,用 `nohup ... > /tmp/x.out 2>&1 &` + sleep + cat
-- IMRUN 主体在设备 `/home/user/imrun/imrun`(pidof imrun),源码 `build/gldemo_imgui.c` + `build/imgui_gles1.cpp`
-- 插件源码 `research/apps/*/*.cpp`,装在 `/home/user/imrun/apps/*/app.so`
+搞清楚 vgmplay-maemo 当年为什么随时打开都能顺畅播放,并把那条链在 IMRUN 的第二音频后端(AO)里复现到设备上出声。
+
+## 二、环境与访问(全部实测有效)
+
+- **目标设备**:N900 Maemo Fremantle,IP `192.168.101.108`,root/123456。
+  用 python+paramiko(本机 Windows Git Bash 有 python 3.14 + paramiko):
 
 ```python
 import warnings; warnings.filterwarnings('ignore')
@@ -22,52 +23,63 @@ print(o.read().decode(), e.read().decode())
 c.close()
 ```
 
-## 任务背景
+  - 前台会挂的命令(音频探针、任何 while 循环)必须 `nohup ... > /tmp/x.out 2>&1 &` + sleep + cat;
+  - **绝对禁止**在设备上留下循环播放声音的进程(上一个智能体留了个 NokiaTune 循环,用户当场炸了);
+  - **测试音量要小**(amp ≤ 2500 级别)、时长 ≤ 3 秒。
 
-IMRUN v0.4.40/41 增加了三个可选音频后端(DEMO → TONEGEN 里单选):
+- **交叉编译工具链(在 WSL 里,不在 Windows!)**:
+  - 编译器:WSL 内 `arm-linux-gnueabi-gcc`(gcc-cross 11);进 WSL 用 `wsl -e bash -c "..."`
+  - sysroot:WSL 内 `/opt/sysroot`(Maemo glibc 2.5);Windows 侧副本 `E:\working\zcode-projects\Maemo_N900\research\sysroot`
+  - **链接配方**(普通 crt1 与 glibc 2.5 有代差,普通 main 链接必挂,必须用这个):
 
-| 选项 | 实现 | 现状 |
-|---|---|---|
-| ALSA | plughw:0,0 常驻持有 + writei,自写 writer 线程 | 能出声,但 STOP/拖音量瞬间偶发秒级 XRUN 风暴(audio_dbg.log 里 223 条 `T ERR w=-32 state=4`,聚簇在 UI 卡顿 72~93ms 后;plain prepare 无法恢复这个 plughw) |
-| AO(vgmplay) | dlopen `/opt/libao/lib/libao.so.2`,复刻 vgmplay Stream.c:ao_initialize → ao_default_driver_id → ao_open_live({16,44100,2,4}) → 阻塞 ao_play 2KB 循环 | **完全无声**;独立探针在设备上**卡死**(睡在 do_sys_poll,持有 pipes+socket = pulse 客户端特征) |
-| SDL(ppsspp) | dlopen `/usr/lib/libSDL-1.2.so.0`,复刻 ppsspp PCMain.cpp:SDL_Init(AUDIO) → SDL_OpenAudio(44100/S16/2ch/2048, callback) → SDL_PauseAudio(0) | **无声**(未深查) |
+```bash
+arm-linux-gnueabi-gcc --sysroot=/opt/sysroot -O1 \
+  -nostartfiles -nodefaultlibs \
+  -Wl,--dynamic-linker,/lib/ld-linux.so.3 \
+  -o out probe.c \
+  /mnt/e/working/zcode-projects/Maemo_N900/build/libdl.so.2 \
+  -lm -lgcc -lgcc_s -lc
+```
 
-## 已实证的设备事实(截至 2026-10-15 15:30)
+  - 源文件放 `E:\working\zcode-projects\Maemo_N900\build\`(WSL 路径 `/mnt/e/working/zcode-projects/Maemo_N900/build/`),编译在 WSL /tmp 做;
+  - 探针 C 代码必须自带:`void *__attribute__((visibility("hidden"))) __dso_handle = (void *)&__dso_handle;`(无 crt);`setvbuf(stdout,NULL,_IONBF,0)` 且关键步骤打印到 stderr;
+  - 二进制 sftp 传到设备 `/home/user/`(设备 /tmp 放不下大文件),`chmod 755` 后 `su - user -c 'DISPLAY=:0 /home/user/xxx'` 跑。
 
-1. **libao 真身**:`/opt/libao/lib/libao.so.2`;插件目录 `/opt/libao/lib/ao/plugins-2/` 里**只有 libalsa09.so**(无 pulse 插件、无 oss 插件);`/etc/libao.conf` 不存在。
-2. **pulseaudio 以 system-mode 运行**:`/usr/bin/pulseaudio --system --high-priority`(pid ~876),module-suspend-idle(空闲释放声卡)。
-3. **探针卡死位置**:睡在 `do_sys_poll`,fd 表有 pipes+socket(pulse native 协议客户端特征)——疑似 ALSA 的 pulse 插件连 system-mode pulse 时被卡(alive 但 15 秒无输出,alarm 自杀后无输出文件内容,stdout 全缓冲坑已用 setvbuf 规避过一次仍无输出,原因待查)。
-4. **上一个被取消的智能体**用 `canberra-gtk-play`(libcanberra→pulse)测试,**手机响起了 NokiaTune.aac 循环**(`/usr/share/sounds/NokiaTune.aac` 存在,notification-daemon 回放)——这反证:**从 user 会话经 libcanberra→pulse 路径是能出声的**。它的探针产物在 /tmp/(ap*.out 全空、diag.sh 空、ao_probe2 存在)。该智能体被取消前没能回传结论。
-5. vgmplay 二进制已不在设备上(`/usr/bin/VGMPlay_040-9_src/` 不存在),无法直接对照运行;本地源码 `research/vgmplay-maemo/VGMplay for maemo 5/VGMPlay_040-9_src/`(Makefile `USE_LIBAO=1` 默认,Stream.c 是后端)。
-6. IMRUN 主程序是 **root 启动 → setuid(29999) 丢特权**;探针直接 su - user。这个差异从未被排除过。
+- **IMRUN 源码**:宿主 `E:\working\zcode-projects\Maemo_N900\build\gldemo_imgui.c`(音频后端全在这一个文件里,搜 `audio_backend`);插件 `research/apps/demo/demo.cpp`(TONEGEN 单选框)。部署由**主窗口**做,你不要自己部署主程序。
 
-## 核心谜题(新窗口的主线)
+## 三、已实证事实(全部可信,别重复验证浪费时间)
 
-vgmplay 当时 = libao → 唯一插件 alsa09 → ALSA(哪个设备?)→ ??? → 出声顺畅。
-我们 = 同样的调用序列 → 卡死/无声。
+1. IMRUN v0.4.42 三后端单选(DEMO→TONEGEN):**ALSA(plughw 直连,能响但 UI 卡顿时偶发 XRUN 风暴)/ AO(无声,探针卡死)/ SDL(无声,未深查)**。
+2. 设备 libao:`/opt/libao/lib/libao.so.2`;插件目录 `/opt/libao/lib/ao/plugins-2/` **只有 libalsa09.so**;无 /etc/libao.conf。
+3. pulseaudio **system-mode** 运行(`--system --high-priority`,pid~876,module-suspend-idle 空闲释放声卡)。
+4. **AO 无声/卡死根因(上一窗口已基本锁定,你负责实证闭环)**:alsa09 插件按 "default" 打开 → ALSA 的 pulse 插件 → system-mode pulse 只认 native socket+cookie → **user(29999) 读 pulse cookie EACCES → 探针永久睡在 do_sys_poll**(带 pulse socket fd)。独立探针已复现。
+5. **libcanberra→pulse 能出声**(旁证:曾触发 NokiaTune.aac 回放,用户亲耳听到)——pulse 路径本身活着,死的是 cookie 授权那条腿。
+6. **上一窗口对 vgmplay 成功机制的最佳判断**:vgmplay 时代 pulse 是 per-user 模式(每个用户自己的 cookie/runtime socket),"default" 能通;现在是 system-mode,"default" 是死路。**唯一可复现路径 = 让 alsa09 绕过 pulse 直连 ALSA**:`ao_set_option` / `ao_option { "dev", "plughw:0,0" }`(读 `research/libao-src/libao-0.8.8/src/plugins/alsa09/` 源码确认选项键名和优先级)。
+7. SDL 后端无声原因未查。怀疑同根(SDL 1.2 Maemo 的 audio driver 卡 pulse 连接),可用 `SDL_AUDIODRIVER=dsp` 环境变量对照,但 N900 无 /dev/dsp,预期此路不通——以实测为准。
+8. ALSA 直连 plughw:0,0 **能出声**(探针和 IMRUN ALSA 后端都证明过)。
 
-**必须回答的问题:**
-1. ao_default_driver_id() 在这台机器上返回什么?ao_open_live 到底走到哪一步卡住(读 libao 0.8.8 源码 `research/libao-src/libao-0.8.8/src/audio_out.c` 的驱动加载与 conf 逻辑 + alsa09 插件源码,然后设备上验证)?
-2. alsa09 插件打开的是 "default"(→pulse)还是 "hw"?如果是 default→pulse,为什么 libcanberra 经 pulse 能响而 alsa09 经 pulse 卡死(cookie?system-mode auth?X11 root-vs-user?)?
-3. vgmplay 当年的运行身份/环境(run.sh 是用户跑的;但当年 pulse 状态、plughw 占用情况可能不同)。
-4. SDL 无声的独立原因(SDL 1.2 的 audio driver 在 Maemo 是什么?pulse 插件?dsp?SDL_AUDIODRIVER 环境变量没设时 fallback 到哪?)。
+## 四、你的执行清单(按顺序)
 
-## 已修好、与调查无关的前端 bug(v0.4.42,已部署)
+1. **探针三连**(小音量、≤3 秒,全走 paramiko+nohup):
+   a. ALSA plughw:0,0 直写(对照组,预期出声);
+   b. ao_open_live + `ao_option{"dev","plughw:0,0"}`(alsa09 直连,验证 vgmplay 真路径);
+   c. ao_open_live + 默认选项(复现卡死,给结论补最后一枪;用 `alarm(10)` 自杀)。
+   读 libao 0.8.8 源码确认 alsa09 选项键名(可能是 "dev" 或 "dsp"),**源码为准**。
+2. **改 IMRUN AO 后端**:`build/gldemo_imgui.c` 里搜 `ao_open_live`,把 ao_open_live 调用改为带 `{"dev","plughw:0,0"}` 选项(结构 `typedef struct { const char *name; const char *value; } ao_option_t;`,链表 next 字段按 libao 头文件真实布局——读 `research/libao-src/libao-0.8.8/include/ao/ao_private.h` 或 ao.h 确认,别猜)。改完**不要自己部署**,停在本地编译通过。
+3. **SDL 后端**:`strings`/源码级确认 SDL 1.2 在 Maemo 的 audio driver 缺省值;若同样是 pulse 死路,在交接记录里写明结论即可,**不要求修**。
+4. **汇报**:探针输出原文 + 改动 diff + 结论,交给主窗口部署验证。
 
-- 负秒数计时:AO writer 到 deadline break 时没清 audio_on → 已清;SDL 由 audio_ctl 线程代为执行 deadline;demo 显示 clamp ≥0
-- 闪退:`audio_stop_full` 在 pcm 已释放(NULL)时掉进 ALSA 分支解引用 NULL → 顶部加空态短路
+## 五、红线
 
-## 工具链坑(复用必读)
+- ALSA 后端(backend 0)与 UI 逻辑一行不动;`audio_stop_full` 的空态短路、deadline 清理(v0.4.42 修的)不许回退;
+- 不在设备上部署任何东西(探针二进制除外,放 /home/user,测试完 `rm` 掉);
+- 测试进程必须 self-terminate(alarm/有限时长),离开前 `ps` 确认无残留、无声音循环;
+- 设备上 pulse 服务、tonegend 等**系统进程不许杀**。
 
-- WSL 交叉编译主程序配方:`build/` 下 job3.sh(经 `wsl -e bash -c "$(cat job3.sh)" < srcs.b64`,数据走 stdin);
-- 独立小程序链接配方(普通 crt1 与 glibc2.5 有代差,必须):
-  `arm-linux-gnueabi-gcc --sysroot=/opt/sysroot -O1 -nostartfiles -nodefaultlibs -Wl,--dynamic-linker,/lib/ld-linux.so.3 -o out src.c /mnt/e/.../build/libdl.so.2 -lm -lgcc -lgcc_s -lc`
-- 设备 /tmp 放不下大文件,sftp 传 /home/user;
-- 探针 stdout 全缓冲:必须 setvbuf(stdout,NULL,_IONBF,0),输出走 stderr 更稳;
-- 严禁留下无限循环出声的进程在设备上跑(上一个智能体留下了 NokiaTune 循环,用户当场炸了)。
+## 六、参考文件
 
-## 底线
-
-- ALSA 后端和 UI 一行都不要动(用户红线:v0.4.38 曾把播放改挂过一次);
-- 每个结论必须有命令输出或源码行号支撑;
-- 最终交付:vgmplay 成功的机制链 + 在 IMRUN 里复现它需要的条件清单(环境变量/驱动选择/打开顺序)。
+- libao 0.8.8 完整源码:`research/libao-src/libao-0.8.8/`(audio_out.c=核心,plugins/alsa09/=插件)
+- vgmplay-maemo 后端:`research/vgmplay-maemo/VGMplay for maemo 5/VGMPlay_040-9_src/Stream.c`(USE_LIBAO 路径)
+- ppsspp 后端:`research/ppsspp_n900/ppsspp-0.9.6/native/base/PCMain.cpp`
+- IMRUN 音频代码:`build/gldemo_imgui.c`(搜 audio_backend / ao_open_live / sdl_open)
+- 开发日志:`build/GLDEMO_IMGUI.md`(搜 v0.4.38/40/41/42)
