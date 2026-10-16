@@ -6,10 +6,32 @@
 
 一个围绕 Nokia N900 / S60 / J2ME 老派移动平台的完整开发档案：
 
-- **真机可跑的 VGM（游戏芯片音乐）播放器**——基于 2023 年移植的 vgmplay
+- **真机可跑的 ImGui GLES1 应用运行时**（IMRUN v0.4.46r）—— 插件化 VGM 播放器 + 4 音频后端
+- **PULSE 音频后端**（v0.4.46r 新增）—— 系统音量实时响应，48000Hz 零重采样流畅播放
 - 自建 **Fremantle 交叉编译工具链**（无需任何 Nokia 官方 SDK）
 - Symbian S60v3 生态考古：模拟器、补丁、闭源应用开膛分析
 - J2ME 时代的音频输出路线研究（实时合成 / MIDI 转译 / 离线渲染）
+
+## 核心成果（v0.4.46r）
+
+### IMRUN —— ImGui Runtime on N900
+
+**4 音频后端并存**：
+- **SDL/plughw**（默认）—— PicoDrive 模式，独立后端 0 延迟，应用内音量
+- **PULSE (sink.hw0)**（新增）—— 系统音量实时响应，硬件音量键 + 滑条双控
+- **ALSA (plughw)**—— 直连 ALSA，调试后端
+- **libao (vgmplay)**—— 兼容 vgmplay-maemo 路径
+
+**用户验证**："不仅软件内可以调音量，系统音量也响应了，而且还很顺畅。" ✅
+
+**技术亮点**：
+- 解决 4 个致命根因（跨线程死锁、Nokia 路由卡死、重采样噼啪、声卡占用冲突）
+- 48000Hz 零重采样 → 600MHz 单核流畅播放 20 秒无断流
+- AOTEST 自动化压力测试：4 后端 × 10 轮 × 快速 PLAY/STOP 全通过
+
+**完整文档**：
+- `docs/PULSE_BACKEND_IMPLEMENTATION.md` —— 实现详解（根因分析 + 代码结构 + 故障排查）
+- `docs/AUDIO_BACKENDS.md` —— 架构全貌（4 后端对比 + PicoDrive 先例论证）
 
 ## 设备档案
 

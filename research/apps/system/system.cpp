@@ -11,6 +11,21 @@ extern char hw[8][96];
 extern int hw_n;
 }
 
+/* 音频设置 (v0.4.45 起从 demo 插件迁入): 后端选择 + 测试音 (TONEGEN) + 流统计.
+   后端切换 + 测试音输出使用与 demo 完全相同的宿主 API. */
+extern "C" {
+void audio_ui_start(int seconds);
+void audio_ui_stop(void);
+void audio_ui_set_backend(int be);
+extern int audio_on;
+extern int audio_backend;       /* 0=ALSA 1=libao 2=SDL(实际复用 ALSA plughw 路径) */
+extern int audio_volume, audio_wave;
+extern long audio_flow;
+extern int dbg_underruns, dbg_stalls;
+extern double audio_deadline;
+double imrun_now(void);
+}
+
 extern "C" {
 void imrun_ui_fontface(int);
 void imrun_ui_fontsize(float);
@@ -60,6 +75,41 @@ extern "C" void imapp_frame(double t) {
             if (ImGui::SliderFloat("UI SCALE", &uiscale, 0.6f, 2.0f, "%.2fx",
                                    ImGuiSliderFlags_AlwaysClamp))
                 imrun_ui_scale(uiscale);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("AUDIO")) {
+            /* 后端选择 (v0.4.45 起默认 SDL; 切换走 audio-ctl 线程串行化, 不会漏设备) */
+            ImGui::TextUnformatted("OUT BACKEND");
+            if (ImGui::RadioButton("ALSA plughw",  audio_backend == 0)) audio_ui_set_backend(0);
+            ImGui::SameLine();
+            if (ImGui::RadioButton("libao(VGM)",   audio_backend == 1)) audio_ui_set_backend(1);
+            ImGui::SameLine();
+            if (ImGui::RadioButton("SDL(pulse)",   audio_backend == 2)) audio_ui_set_backend(2);
+            ImGui::SameLine();
+            if (ImGui::RadioButton("PULSE (paplay)", audio_backend == 3)) audio_ui_set_backend(3);
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                "v0.4.44+: SDL 复用 ALSA plughw 路径. v0.4.46+: PULSE 走 libpulse-simple (paplay 风格, 受系统音量控制)");
+            ImGui::Separator();
+            /* 测试音 (TONEGEN, 440Hz 内置发生器) */
+            ImGui::TextUnformatted("TEST TONE");
+            if (audio_on) {
+                int left = (int)(audio_deadline - imrun_now());
+                if (left < 0) left = 0;
+                ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f),
+                                   "PLAYING (%ds left)", left);
+            } else {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "idle");
+            }
+            if (ImGui::Button("PLAY 20s", ImVec2(140, 48))) audio_ui_start(20);
+            ImGui::SameLine();
+            if (ImGui::Button("STOP", ImVec2(140, 48))) audio_ui_stop();
+            const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
+            ImGui::Combo("WAVE", &audio_wave, waves, 4);
+            ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
+            ImGui::Separator();
+            /* 流统计 (实时反馈: flow=0=后端死了; underrun/stall=卡顿计数) */
+            ImGui::Text("flow=%ld | underrun=%d | stall=%d",
+                        audio_flow, dbg_underruns, dbg_stalls);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("INFO")) {

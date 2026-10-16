@@ -110,7 +110,16 @@ long audio_flow = 0;   /* frames the active backend has actually produced this s
 int g_wall_mode = 0, g_wall_variant = 0;
 int audio_volume = 100;
 int audio_wave = 0; /* 0 sine 1 tri 2 square 3 saw */ /* 0..1000 software gain (100=unity); >320 clamps hard, >1000 undefined */
-int audio_backend = 0; /* 0=ALSA plughw (current) 1=libao (vgmplay) 2=SDL (ppsspp) */
+int audio_backend = 2; /* 默认 SDL (走 ALSA plughw, 稳定). 0=ALSA 1=libao 2=SDL 3=PULSE(paplay/sink.hw0) */
+int (*audio_source_fn)(short *dst, int frames) = 0; /* plugin VGM feed: ret 1=continue, 0=EOF */
+int audio_rate = 44100; /* gen_samples 相位步进用; PULSE 后端设 48000 (sink.hw0 原生率) */
+/* libpulse-simple 后端 (v0.4.46+, paplay 风格) - 见 audio_pulse.c */
+extern int  audio_pulse_open(int rate, int channels);
+extern int  audio_pulse_write(const short *buf, int frames);
+extern int  audio_pulse_can_write(int max_latency_us);
+extern unsigned long audio_pulse_latency(void);
+extern int  audio_pulse_alive(void);
+extern void audio_pulse_close(void);
 static float audio_phase;
 double audio_deadline = 0;
 double dbg_max_stall = 0;
@@ -832,8 +841,9 @@ static void wavetable_init(void) {
 }
 static void gen_samples(short *dst, int n) {
     if (!wavetable_ready) wavetable_init();
-    /* phase step in wavetable slots per sample: 440Hz over 44100Hz */
-    double step = (double)WT_SIZE * 440.0 / 44100.0;
+    /* phase step in wavetable slots per sample: 440Hz over the ACTIVE rate.
+       audio_rate = 44100 (三后端) or 48000 (PULSE sink.hw0 原生, 免重采样) */
+    double step = (double)WT_SIZE * 440.0 / (double)audio_rate;
     for (int i = 0; i < n; i++) {
         int idx = (int)audio_phase;
         float f = audio_phase - (float)idx;
@@ -868,7 +878,9 @@ static void *audio_writer(void *arg) {
         unsigned long seq = 0;
         while (thread_run) {
             if (audio_deadline && now() > audio_deadline) { audio_on = 0; break; }
-            gen_samples(frag, 512);
+            if (audio_source_fn) {
+                if (!audio_source_fn(frag, 512)) { audio_on = 0; break; } /* EOF */
+            } else gen_samples(frag, 512);
             audio_flow += 512;
             if (!ao_play_fn(ao_dev, (char *)frag, sizeof(frag))) {
                 alog("AO play FAIL seq=%lu", seq);
@@ -877,6 +889,72 @@ static void *audio_writer(void *arg) {
             seq++;
         }
         alog("T ao exit seq=%lu", seq);
+        return NULL;
+    }
+    if (audio_backend == 3) {
+        /* libpulse-simple path (v0.4.46+): paplay 风格, 字节流入 pulse sink.
+           pulse server 自动应用 sink volume (Maemo 系统栏/硬件键/amixer
+           改 sink vol 时输出立即变). pa_simple_write 是阻塞的, 与
+           snd_pcm_writei 类似; 块大小 PERIOD=2048 帧 ~46ms. */
+        short chunk[PERIOD * 2];
+        unsigned long seq = 0;
+        double spawn_t = now();
+        alog("T pulse spawn tid=%lu", (unsigned long)arg);
+        /* pa_simple 非线程安全: open/write/close 全在 writer 线程内.
+           audio_start 不碰 pa_simple, 只 spawn 这里.
+           rate=48000: sink.hw0 原生 48000 (system.pa rate=48000), 零重采样.
+           44100 流会被 pulse server 重采样, 600MHz CPU 顶不住 -> 噼啪声. */
+        if (!audio_pulse_open(48000, 2)) {
+            alog("T pulse open FAIL");
+            audio_on = 0;
+            return NULL;
+        }
+        /* silence pad: 与 plughw 路径同样的"首块 XRUN"防御 */
+        static const short zeros[PERIOD * 2];
+        if (!audio_pulse_write(zeros, PERIOD)) {
+            alog("T pulse silence pad FAIL");
+            audio_on = 0;
+            return NULL;
+        }
+        if (!audio_pulse_write(zeros, PERIOD)) {
+            alog("T pulse silence pad2 FAIL");
+            audio_on = 0;
+            return NULL;
+        }
+        while (thread_run) {
+            double t_before = now();
+            if (audio_deadline && now() > audio_deadline) {
+                thread_run = 0; audio_on = 0;
+                break;
+            }
+            if (!thread_run) break;  /* STOP 信号: 不再 write, 直接退出 */
+            if (audio_source_fn) {
+                if (!audio_source_fn(chunk, PERIOD)) { thread_run = 0; audio_on = 0; break; }
+            } else gen_samples(chunk, PERIOD);
+            audio_flow += PERIOD;
+            /* pa_simple_write 是同步阻塞 API: 正常播放时每块阻塞 ~46ms
+               (正好是播放节奏). 初始填充时第一块可能阻塞 ~1.4s (server
+               端缓冲填满后等消费). 这是 pa_simple 的固有行为, 不是死锁.
+               STOP 时最多多等一个 write 周期 (~46ms 稳态 / ~1.4s 初始). */
+            if (!audio_pulse_write(chunk, PERIOD)) {
+                alog("T pulse write FAIL seq=%lu", seq);
+                break;
+            }
+            {
+                double stall = now() - t_before;
+                if (stall > dbg_max_stall) dbg_max_stall = stall;
+                if (stall > 0.1) dbg_stalls++;
+                alog("T pulse seq=%lu gen+write=%.1fms", seq, stall * 1000.0);
+                if (seq == 0)
+                    alog("T pulse FIRST-WRITE latency=%.1fms", (t_before - spawn_t) * 1000.0);
+                seq++;
+            }
+        }
+pulse_exit:
+        alog("T pulse exit seq=%lu", seq);
+        audio_pulse_close();   /* writer 自己关: pa_simple 非线程安全, 所有操作
+                                  必须在同一线程内. 避免 audio-ctl 并发 flush/free
+                                  导致 libpulse 内部死锁. */
         return NULL;
     }
     short chunk[PERIOD * 2];
@@ -902,7 +980,9 @@ static void *audio_writer(void *arg) {
             thread_run = 0; audio_on = 0;   /* truthful state for UI */
             break;
         }
-        gen_samples(chunk, PERIOD);
+        if (audio_source_fn) {
+            if (!audio_source_fn(chunk, PERIOD)) { thread_run = 0; audio_on = 0; break; } /* EOF */
+        } else gen_samples(chunk, PERIOD);
         audio_flow += PERIOD;
         long w = snd_pcm_writei(pcm, chunk, PERIOD);
         long done = 0;
@@ -979,9 +1059,31 @@ int audio_start(int seconds) {
         return 1;
     }
     /* backend 0 (ALSA) and backend 2 (SDL/PSP) both go through ALSA plughw */
+    if (audio_backend == 3) {
+        /* libpulse-simple (v0.4.46+, paplay 风格).
+           pa_simple 非线程安全: open/write/close 必须全在 writer 线程内.
+           audio_start 只释放 ALSA hold + spawn writer, 不碰 pa_simple.
+           audio_rate=48000: sink.hw0 原生率, gen_samples 相位步进用. */
+        audio_rate = 48000;
+        if (pcm) { snd_pcm_close(pcm); pcm = NULL; alog("PULSE: alsa hold released"); }
+        if (ao_dev) { if (ao_close_fn) ao_close_fn(ao_dev); ao_dev = NULL; }
+        sdl_close();
+        alog("S PULSE START req=%ds", seconds);
+        audio_phase = 0;
+        audio_deadline = seconds ? now() + seconds : 0;
+        thread_run = 1;
+        if (pthread_create_fn(&audio_tid, NULL, audio_writer, NULL) != 0) {
+            thread_run = 0;
+            alog("S PULSE spawn FAIL");
+            return 0;
+        }
+        audio_on = 1;
+        return 1;
+    }
     if (!pcm) pcm_acquire();   /* returning from AO backend: take hw back */
     if (!pcm) return 0;
     sdl_close();   /* leaving SDL backend? its device must not linger */
+    audio_rate = 44100;   /* plughw 路径固定 44100 */
     alog("S START req=%ds state=%d avail=%ld was_run=%d", seconds,
          snd_pcm_state_fn ? snd_pcm_state_fn(pcm) : -1,
          snd_pcm_avail_fn ? snd_pcm_avail_fn(pcm) : -1L, thread_run);
@@ -1003,8 +1105,22 @@ int audio_start(int seconds) {
     return 1;
 }
 
+/* libpulse-simple 后端 (v0.4.46+): paplay 风格 - 见 audio_pulse.c */
+
 void audio_stop_full(void) {
     double t0 = now();
+    if (audio_backend == 3) {
+        /* libpulse-simple: 只 join writer, writer 自己 close.
+           pa_simple 非线程安全: 任何线程都不能在 writer 还在 pa_simple_write
+           时调 flush/free (libpulse 内部死锁). thread_run=0 让 writer 下一轮
+           循环退出并自行 audio_pulse_close(). */
+        thread_run = 0;
+        if (pthread_join_fn) pthread_join_fn(audio_tid, NULL);
+        alog("P pulse stop joined in %.1fms", (now() - t0) * 1000.0);
+        audio_deadline = 0;
+        audio_on = 0;
+        return;
+    }
     if (audio_backend == 2 && sdl_audio_open) {
         /* pause + close: SDL joins its own thread internally */
         thread_run = 0;
@@ -1082,6 +1198,16 @@ static void *audio_ctl(void *arg) {
             if (audio_on || thread_run || ao_dev || sdl_audio_open)
                 audio_stop_full();   /* stops the CURRENT (old) backend */
             audio_backend = audio_cmd_be;
+            /* 切到 PULSE (3) 时必须无条件释放声卡 hold:
+               PULSE 后端要 pulse server 拿 sink.hw0, 但 IMRUN 启动时 pcm_acquire()
+               预占了 plughw. 若没在播, 上面 audio_stop_full 不会跑, hold 还在
+               -> pulse server resume sink.hw0 抢不到硬件 -> pa_simple_write 永久
+               阻塞 + 已写块 XRUN 噼啪. 这是 PULSE 后端的致命前提. */
+            if (audio_backend == 3) {
+                if (pcm) { snd_pcm_close(pcm); pcm = NULL; alog("PULSE: hold released (setbackend)"); }
+                if (ao_dev) { if (ao_close_fn) ao_close_fn(ao_dev); ao_dev = NULL; }
+                sdl_close();
+            }
             alog("C ctl: backend now %d", audio_backend);
         } else if (cmd == 2) {
             alog("C ctl: STOP");
@@ -1269,12 +1395,14 @@ int main(void) {
         int vols[] = { 30, 200, 80, 15, 250, 120, 40, 300, 60, 180, 90, 20, 260, 140, 50 };
         int nvols = (int)(sizeof vols / sizeof vols[0]);
         int hard_fail = 0;
-        int backends[3] = { 0, 1, 2 };   /* 0=ALSA 1=libao(vgmplay) 2=SDL(psp, reuses ALSA path) */
-        for (int bi = 0; bi < 3 && !hard_fail; bi++) {
+        int backends[4] = { 0, 1, 2, 3 };   /* 0=ALSA 1=libao 2=SDL 3=PULSE(sink.hw0).
+                                            PULSE 必须 device=sink.hw0 (默认 sink
+                                            = Nokia music 路由, 实测卡死). */
+        for (int bi = 0; bi < 4 && !hard_fail; bi++) {
             int be = backends[bi];
             audio_backend = be;
             alog("=== AOTEST backend=%d (%s) ===", be,
-                 be == 0 ? "ALSA" : be == 1 ? "libao-vgmplay" : "SDL-psp");
+                 be == 0 ? "ALSA" : be == 1 ? "libao-vgmplay" : be == 2 ? "SDL-psp" : "PULSE-sink.hw0");
             for (int cyc = 0; cyc < 10; cyc++) {
                 alog("--- AOTEST be%d cyc %d: PLAY(2s) ---", be, cyc);
                 if (!audio_start(2)) {
