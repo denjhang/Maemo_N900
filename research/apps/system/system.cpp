@@ -105,7 +105,7 @@ extern "C" void imapp_frame(double t) {
             if (ImGui::Button("STOP", ImVec2(140, 48))) audio_ui_stop();
             const char *waves[4] = {"SINE", "TRIANGLE", "SQUARE", "SAW"};
             ImGui::Combo("WAVE", &audio_wave, waves, 4);
-            ImGui::SliderInt("VOL", &audio_volume, 0, 1000, "%d%%");
+            ImGui::SliderInt("VOL", &audio_volume, 0, 200, "%d%%");
             ImGui::Separator();
             /* 流统计 (实时反馈: flow=0=后端死了; underrun/stall=卡顿计数) */
             ImGui::Text("flow=%ld | underrun=%d | stall=%d",
