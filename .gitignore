@@ -6,6 +6,7 @@ shots/
 research/*
 !research/sistools/
 !research/PROGRESS.md
+!research/apps/
 research/sistools/sisinfo-master/
 research/sistools/af_frames/
 research/sistools/pc_frames/
