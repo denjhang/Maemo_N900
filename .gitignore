@@ -4,6 +4,7 @@ shots/
 
 # research/ 只保留自研工具；下载/爬取的档案一律不入库（留本地硬盘）
 research/*
+!research/apps/
 !research/sistools/
 !research/PROGRESS.md
 research/sistools/sisinfo-master/

@@ -2,6 +2,7 @@
 // (fixed-function client arrays) + demo UI content for the N900 showcase.
 // All GL entry points are handed in from the C side (runtime dlopen'd).
 #include "imgui.h"
+#include "imgui_internal.h"  // For RegisterUserTexture
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
@@ -46,6 +47,9 @@ static int g_fontsel = 1;
 static int scrW = 800, scrH = 480;
 static unsigned fontTex = 0;
 
+// Forward declarations
+extern "C" void alog_public(const char *fmt, ...);
+
 // GLES constants (values duplicated from C side; keep in sync)
 #define GL_TEXTURE_2D      0x0DE1
 #define GL_RGBA            0x1908
@@ -68,10 +72,10 @@ static unsigned fontTex = 0;
 #define GL_CLAMP_TO_EDGE   0x812F
 
 static void upload_texture(ImTextureData *tex) {
-    unsigned id = (unsigned)(intptr_t)tex->TexID;
+    unsigned id = (unsigned)tex->TexID;
     if (id == 0) {
         gl.GenTextures(1, &id);
-        tex->SetTexID((ImTextureID)(intptr_t)id);
+        tex->SetTexID((ImTextureID)id);
     }
     gl.BindTexture(GL_TEXTURE_2D, id);
     gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -90,7 +94,7 @@ static void upload_texture(ImTextureData *tex) {
         gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
         delete[] tmp;
     }
-    tex->SetTexID((ImTextureID)(intptr_t)id);
+    tex->SetTexID((ImTextureID)id);
     tex->SetStatus(ImTextureStatus_OK);
     fontTex = id;
 }
@@ -100,6 +104,98 @@ extern void alog_public(const char *fmt, ...);
 extern int ImGui_OpenPopupCount(void);   /* patched-core BACK support */
 extern int igui_desk_nav_index(void);
 extern void ImGui_CloseTopPopup(void);
+
+// stb_image integration for PNG loading
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#define STBI_ASSERT(x)
+#include "stb_image.h"
+
+// Load PNG file into ImTextureData (for plugin use)
+extern "C" ImTextureData* imrun_load_png(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return nullptr;
+    }
+    
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    unsigned char *file_data = new unsigned char[size];
+    fread(file_data, 1, size, f);
+    fclose(f);
+    
+    int w, h, channels;
+    unsigned char *pixels = stbi_load_from_memory(file_data, size, &w, &h, &channels, 4);
+    delete[] file_data;
+    
+    if (!pixels) {
+        return nullptr;
+    }
+    
+    // Create ImTextureData using the Create() method
+    ImTextureData *tex = new ImTextureData();
+    tex->Create(ImTextureFormat_RGBA32, w, h);
+    
+    // Copy pixels (ImTextureData owns the memory now)
+    unsigned char *dst = (unsigned char*)tex->GetPixels();
+    memcpy(dst, pixels, w * h * 4);
+    stbi_image_free(pixels);
+    
+    // Mark for upload - backend will handle it in render loop
+    tex->SetStatus(ImTextureStatus_WantCreate);
+    
+    return tex;
+}
+
+// Register a plugin texture and return the actual OpenGL TexID after upload
+// IMPORTANT: Call this after imrun_load_png(), then wait 1 frame before using the TexID
+extern "C" unsigned imrun_register_texture_and_get_id(ImTextureData *tex) {
+    if (!tex) return 0;
+    
+    // Register to UserTextures for persistent management
+    ImGui::RegisterUserTexture(tex);
+    
+    // Force immediate upload (normally happens in render loop)
+    if (tex->Status == ImTextureStatus_WantCreate) {
+        unsigned id = 0;
+        gl.GenTextures(1, &id);
+        gl.BindTexture(GL_TEXTURE_2D, id);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        
+        int w = tex->Width, h = tex->Height;
+        int pitch = tex->GetPitch();
+        const unsigned char *px = (const unsigned char *)tex->GetPixels();
+        
+        if (pitch == w * 4) {
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        } else {
+            unsigned char *tmp = new unsigned char[w * h * 4];
+            for (int y = 0; y < h; y++)
+                memcpy(tmp + y * w * 4, px + y * pitch, w * 4);
+            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
+            delete[] tmp;
+        }
+        
+        tex->SetTexID((ImTextureID)id);
+        tex->SetStatus(ImTextureStatus_OK);
+        
+        return id;  // Return the actual GL texture ID
+    }
+    
+    return 0;
+}
+
+// Original registration function (kept for compatibility)
+extern "C" void imrun_register_texture(ImTextureData *tex) {
+    if (!tex) return;
+    ImGui::RegisterUserTexture(tex);
+}
 int igui_init(int w, int h, IGlfns *fns) {
     gl = *fns;
     scrW = w; scrH = h;
@@ -610,15 +706,21 @@ void igui_mouse_pos(float x, float y) { ImGui::GetIO().AddMousePosEvent(x, y); }
 void igui_mouse_btn(int btn, int down) { ImGui::GetIO().AddMouseButtonEvent(btn, down != 0); }
 void igui_render(void) {
     ImGui::Render();
-    ImVector<ImTextureData *> &texs = ImGui::GetPlatformIO().Textures;
-    for (int i = 0; i < texs.size(); i++) {
-        ImTextureData *tex = texs[i];
+    
+    // IMPORTANT: Access through main program's ImGui context explicitly
+    ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    
+    // Process texture uploads and deletions
+    for (int i = 0; i < platform_io.Textures.Size; i++) {
+        ImTextureData *tex = platform_io.Textures[i];
+        
         if (!tex) continue;
         if (tex->Status == ImTextureStatus_WantCreate ||
-            tex->Status == ImTextureStatus_WantUpdates)
+            tex->Status == ImTextureStatus_WantUpdates) {
             upload_texture(tex);
+        }
         else if (tex->Status == ImTextureStatus_WantDestroy) {
-            unsigned did = (unsigned)(intptr_t)tex->TexID;
+            unsigned did = (unsigned)tex->TexID;
             if (did && pglDeleteTextures) pglDeleteTextures(1, &did);
             tex->SetStatus(ImTextureStatus_Destroyed);
         }
@@ -651,7 +753,7 @@ void igui_render(void) {
         for (int ci = 0; ci < cmdl->CmdBuffer.Size; ci++) {
             const ImDrawCmd *cmd = &cmdl->CmdBuffer[ci];
             if (cmd->UserCallback) continue;
-            unsigned ctid = (unsigned)(intptr_t)cmd->GetTexID();
+            unsigned ctid = (unsigned)cmd->GetTexID();
             if (ctid) gl.BindTexture(GL_TEXTURE_2D, ctid);   /* per-cmd atlas */
             ImVec4 crs = cmd->ClipRect;
             if (crs.x < fbw && crs.y < fbh && crs.z > 0 && crs.w > 0) {
@@ -824,6 +926,36 @@ void igui_build_ui(double t, float fps) {
             order_sync();
             alog_public("BOOTORDER syncing+saving");
             settings_save();
+        }
+    }
+    {   /* auto-open test: check /home/user/auto_open_app once after boot */
+        static bool s_auto_checked = false;
+        if (!s_auto_checked && g_dyn_n > 0) {
+            s_auto_checked = true;
+            FILE *f = fopen("/home/user/auto_open_app", "r");
+            if (f) {
+                char app_id[64] = {0};
+                if (fgets(app_id, sizeof(app_id), f)) {
+                    // 去掉换行符
+                    for (char *p = app_id; *p; p++) {
+                        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+                    }
+                    // 查找并打开应用
+                    for (int i = 0; i < g_dyn_n; i++) {
+                        if (strcmp(g_dyn[i].id, app_id) == 0) {
+                            g_dyn[i].open = true;
+                            g_dyn[i].cascade = true;
+                            g_dyn[i].ever = true;
+                            g_dyn[i].anim = 0.0f;
+                            g_dyn[i].anim_t0 = now_double();
+                            alog_public("AUTO_OPEN: 已打开应用 '%s' (索引 %d)", app_id, i);
+                            break;
+                        }
+                    }
+                }
+                fclose(f);
+                unlink("/home/user/auto_open_app");  // 删除触发文件
+            }
         }
     }
     {   /* autosave ONLY when a setting actually changed (periodic writes
