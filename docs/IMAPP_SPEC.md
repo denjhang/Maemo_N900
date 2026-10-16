@@ -119,6 +119,13 @@ format 值裁剪。图标、id、manifest 键名一经发布不改名（IMRUN �
 | imapp_icon | 推荐 | `void imapp_icon(void* dl, float cx, float cy, float s)` | **桌面图标（向量绘制）**：dl 是 ImDrawList*，以 (cx,cy) 为中心、s 为半径画；不导出则回退默认立方体（不推荐，千篇一律） |
 | imapp_init | 可选 | `int imapp_init(void)` | 加载时调用一次 |
 | imapp_destroy | 可选 | `void imapp_destroy(void)` | 卸载/窗口关闭时调用——**释放资源（停音频/震动）的唯一钩子** |
+| imapp_pref_size | 可选 | `void imapp_pref_size(float* w, float* h)` | **声明首选窗口尺寸**。少数非 440×320 的应用（如竖屏游戏）用；宿主在应用首次打开时应用一次（即使 imrun.ini 存了旧尺寸也覆盖）。缺省或 0 = 用宿主默认 |
+
+## 输入约定（触摸/键盘）
+- 触摸屏点击 = 核心 X 指针（ButtonPress/Release），运行时已喂给 ImGui。
+- 应用判断"点击自己窗口"用 `ImGui::IsWindowHovered(...) && ImGui::IsMouseClicked(0)`，
+  **不要**直接读全局 `IsMouseClicked`——否则点标题栏/桌面/任务栏也会误触发。
+- 键盘用 `ImGui::IsKeyPressed(ImGuiKey_Space/UpArrow/Enter)`。
 
 ## 宿主供给（可直接引用的符号，从主程序解析）
 - 全部 ImGui 符号（Begin/Text/Button/...）

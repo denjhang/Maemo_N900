@@ -305,23 +305,55 @@ extern "C" void imapp_frame(double t) {
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "纹理加载失败");
     }
 
-    // 菜单 / 结束：用居中的窗口内坐标
+    // 状态提示（居中）；用 draw list 画，与游戏内容同层
+    {
+        const char *hint = nullptr;
+        ImU32 col = IM_COL32(255, 255, 255, 255);
+        float fs = ImGui::GetFontSize();
+        if (game_state == STATE_MENU) {
+            hint = "点击开始 / 空格";
+            col = IM_COL32(255, 255, 255, 255);
+        } else if (game_state == STATE_GAMEOVER) {
+            hint = "Game Over — 点击重来";
+            col = IM_COL32(255, 90, 90, 255);
+        }
+        if (hint) {
+            float tw = ImGui::CalcTextSize(hint).x;
+            ImVec2 tp = ImVec2(origin.x + (area.x - tw) * 0.5f,
+                               origin.y + area.y * 0.5f - fs * 0.5f);
+            // 半透明底衬，保证任何背景下都看得清
+            dl->AddRectFilled(ImVec2(tp.x - 10, tp.y - 6),
+                              ImVec2(tp.x + tw + 10, tp.y + fs + 6),
+                              IM_COL32(0, 0, 0, 140), 6.0f);
+            dl->AddText(tp, col, hint);
+        }
+    }
+
+    /* ---- 输入：触摸/鼠标 + 空格 ----
+       N900 触摸屏的点击会转成鼠标左键事件。用 IsWindowHovered() 限定
+       只有在本窗口内容区内点击才生效（点标题栏/桌面/任务栏不误触发），
+       这是早期版本验证过的做法。 */
+    bool tapped = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+                  ImGui::IsMouseClicked(0);
+    bool keyed = ImGui::IsKeyPressed(ImGuiKey_Space) ||
+                 ImGui::IsKeyPressed(ImGuiKey_UpArrow) ||
+                 ImGui::IsKeyPressed(ImGuiKey_Enter);
+    bool action = tapped || keyed;
+
     if (game_state == STATE_MENU) {
-        ImGui::SetCursorPos(ImVec2(area.x / 2 - 100, area.y / 2 - 30));
-        if (ImGui::Button("开始游戏", ImVec2(200, 60))) {
+        if (action) {
             game_state = STATE_PLAYING;
             bird_y = 240.0f;
-            bird_velocity = 0.0f;
+            bird_velocity = JUMP_VELOCITY;
             score = 0;
         }
+    } else if (game_state == STATE_PLAYING) {
+        if (action) bird_velocity = JUMP_VELOCITY;
     } else if (game_state == STATE_GAMEOVER) {
-        ImGui::SetCursorPos(ImVec2(area.x / 2 - 60, area.y / 2 - 50));
-        ImGui::Text("Game Over!");
-        ImGui::SetCursorPos(ImVec2(area.x / 2 - 100, area.y / 2 - 10));
-        if (ImGui::Button("重新开始", ImVec2(200, 60))) {
+        if (action) {
             game_state = STATE_PLAYING;
             bird_y = 240.0f;
-            bird_velocity = 0.0f;
+            bird_velocity = JUMP_VELOCITY;
             score = 0;
             for (int i = 0; i < pipe_count; i++) {
                 pipes[i].x = CR_W + i * 250.0f;
@@ -331,11 +363,6 @@ extern "C" void imapp_frame(double t) {
         }
     }
 
-    // 空格跳跃
-    if (game_state == STATE_PLAYING && ImGui::IsKeyPressed(ImGuiKey_Space)) {
-        bird_velocity = JUMP_VELOCITY;
-    }
-
     #undef GX
     #undef GY
     /* NO ImGui::End() - the host owns this window */
@@ -343,4 +370,11 @@ extern "C" void imapp_frame(double t) {
 
 extern "C" const char* imapp_name(void) {
     return "Flappy";
+}
+
+/* 竖屏游戏：窄窗口。宿主读取此尺寸作为默认窗口大小。
+   桌面可用高度 = 480 - 48(系统栏) = 432，留一点边距用 420。 */
+extern "C" void imapp_pref_size(float *w, float *h) {
+    *w = 400.0f;
+    *h = 420.0f;
 }

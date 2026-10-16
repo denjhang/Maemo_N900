@@ -351,6 +351,9 @@ struct DynApp {
                                         was already recorded at full alpha in
                                         NewFrame - scale it to 0 or it flashes */
     float anim; double anim_t0, close_t0;
+    float pref_w, pref_h;            /* optional per-app preferred window size
+                                        (imapp_pref_size export; 0 = use default) */
+    bool pref_done;                  /* pref size applied once on first open */
 };
 static DynApp g_dyn[8];
 static int g_dyn_n = 0;
@@ -658,6 +661,12 @@ static void dyn_scan(void) {
         a.destroy = (void (*)(void))dlsym(h, "imapp_destroy");
         a.icon = (void (*)(void *, float, float, float))dlsym(h, "imapp_icon");
         a.sys = (int (*)(void))dlsym(h, "imapp_system");
+        {   /* optional per-app preferred size: imapp_pref_size(&w, &h) */
+            a.pref_w = a.pref_h = 0.0f;
+            void (*psz)(float *, float *) = (void (*)(float *, float *))dlsym(h, "imapp_pref_size");
+            if (psz) { float w = 0, hh = 0; psz(&w, &hh); a.pref_w = w; a.pref_h = hh; }
+        }
+        a.pref_done = false;
         a.open = a.mini = a.ever = a.cascade = a.closing = a.destroyed = false;
         a.collapsed = a.uncoll = a.mfade = false;
         a.fade_k = 1.0f; a.fade_end = false;
@@ -874,6 +883,13 @@ static bool shell_begin_dyn(int di, ImVec2 pos, ImVec2 size) {
     {   /* default spawn pos/size, only honored on the very first Begin */
         ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+    }
+    /* If the app declares a preferred size, force it ONCE per session even if
+       imrun.ini already stored an older size (otherwise the stale ini wins via
+       FirstUseEver and the app keeps the wrong dimensions). */
+    if ((a.pref_w > 0 && a.pref_h > 0) && !a.pref_done) {
+        ImGui::SetNextWindowSize(ImVec2(a.pref_w, a.pref_h), ImGuiCond_Always);
+        a.pref_done = true;
     }
     if (a.uncoll) { ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always); a.uncoll = false; }
     char title[80];
@@ -1363,7 +1379,9 @@ void igui_build_ui(double t, float fps) {
 
     for (int di = 0; di < g_dyn_n; di++) {
         DynApp &a = g_dyn[di];
-        if (!shell_begin_dyn(di, ImVec2(60 + di * 30, 40 + di * 24), ImVec2(440, 320)))
+        ImVec2 def_sz = (a.pref_w > 0 && a.pref_h > 0) ? ImVec2(a.pref_w, a.pref_h)
+                                                       : ImVec2(440, 320);
+        if (!shell_begin_dyn(di, ImVec2(60 + di * 30, 40 + di * 24), def_sz))
             continue;
         a.frame(t);
         /* UNIFIED fade: one mechanism for open/close/minimize/restore - scale
