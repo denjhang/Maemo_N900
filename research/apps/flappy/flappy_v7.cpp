@@ -14,7 +14,7 @@ extern "C" void alog_public(const char *fmt, ...);
 // 主程序提供的 PNG 加载接口
 struct ImTextureData;
 extern "C" ImTextureData* imrun_load_png(const char *path);
-extern "C" unsigned imrun_register_texture_and_get_id(ImTextureData *tex);  // 返回实际的 OpenGL TexID
+extern "C" void imrun_register_texture(ImTextureData *tex);  // 注册（上传由渲染循环做，下帧读 GetTexID）
 
 // 游戏状态
 enum GameState { STATE_MENU, STATE_PLAYING, STATE_GAMEOVER };
@@ -48,7 +48,11 @@ static int score = 0;
 static int high_score = 0;
 static float game_time = 0.0f;
 
-// 纹理 - 存储 OpenGL TexID 而不是通过 ImTextureData 访问
+// 纹理：保存 ImTextureData 句柄，渲染循环上传后再读 GetTexID() 得到 GL id
+static ImTextureData *td_bird[3] = {nullptr};
+static ImTextureData *td_pipe = nullptr;
+static ImTextureData *td_background = nullptr;
+static ImTextureData *td_base = nullptr;
 static unsigned gl_bird[3] = {0};
 static unsigned gl_pipe = 0;
 static unsigned gl_background = 0;
@@ -117,42 +121,51 @@ extern "C" void imapp_frame(double t) {
     
     game_time = (float)t;
     
-    // 延迟加载纹理（在第一帧，ImGui 已完全初始化）
-    if (!textures_loaded) {
+    // 第一帧：加载并注册纹理（上传由渲染循环完成）
+    if (!textures_loaded && !td_bird[0]) {
         const char* asset_base = "/home/user/imrun/apps/flappy/assets";
         char path[256];
-        ImTextureData* temp;
-        
+
         snprintf(path, sizeof(path), "%s/bluebird-midflap.png", asset_base);
-        temp = imrun_load_png(path);
-        if (temp) gl_bird[0] = imrun_register_texture_and_get_id(temp);
-        
+        td_bird[0] = imrun_load_png(path);
+        if (td_bird[0]) imrun_register_texture(td_bird[0]);
+
         snprintf(path, sizeof(path), "%s/bluebird-upflap.png", asset_base);
-        temp = imrun_load_png(path);
-        if (temp) gl_bird[1] = imrun_register_texture_and_get_id(temp);
-        
+        td_bird[1] = imrun_load_png(path);
+        if (td_bird[1]) imrun_register_texture(td_bird[1]);
+
         snprintf(path, sizeof(path), "%s/bluebird-downflap.png", asset_base);
-        temp = imrun_load_png(path);
-        if (temp) gl_bird[2] = imrun_register_texture_and_get_id(temp);
-        
+        td_bird[2] = imrun_load_png(path);
+        if (td_bird[2]) imrun_register_texture(td_bird[2]);
+
         snprintf(path, sizeof(path), "%s/pipe-green.png", asset_base);
-        temp = imrun_load_png(path);
-        if (temp) gl_pipe = imrun_register_texture_and_get_id(temp);
-        
+        td_pipe = imrun_load_png(path);
+        if (td_pipe) imrun_register_texture(td_pipe);
+
         snprintf(path, sizeof(path), "%s/background-day.png", asset_base);
-        temp = imrun_load_png(path);
-        if (temp) gl_background = imrun_register_texture_and_get_id(temp);
-        
+        td_background = imrun_load_png(path);
+        if (td_background) imrun_register_texture(td_background);
+
         snprintf(path, sizeof(path), "%s/base.png", asset_base);
-        temp = imrun_load_png(path);
-        if (temp) gl_base = imrun_register_texture_and_get_id(temp);
-        
-        textures_loaded = (gl_bird[0] && gl_bird[1] && gl_bird[2] && 
-                           gl_pipe && gl_background && gl_base);
-        
-        if (textures_loaded) {
-            alog_public("FLAPPY v7: 纹理加载成功 bird=%u pipe=%u bg=%u", 
-                       gl_bird[0], gl_pipe, gl_background);
+        td_base = imrun_load_png(path);
+        if (td_base) imrun_register_texture(td_base);
+
+        alog_public("FLAPPY v7: 纹理已注册 (等待上传)");
+    }
+
+    // 之后每帧：渲染循环上传完，读回调 TexID（符号扩展已修，安全）
+    if (!textures_loaded && td_bird[0] && td_pipe && td_background && td_base) {
+        gl_bird[0] = (unsigned)td_bird[0]->GetTexID();
+        gl_bird[1] = (unsigned)td_bird[1]->GetTexID();
+        gl_bird[2] = (unsigned)td_bird[2]->GetTexID();
+        gl_pipe = (unsigned)td_pipe->GetTexID();
+        gl_background = (unsigned)td_background->GetTexID();
+        gl_base = (unsigned)td_base->GetTexID();
+
+        if (gl_bird[0] && gl_bird[1] && gl_bird[2] && gl_pipe && gl_background && gl_base) {
+            textures_loaded = true;
+            alog_public("FLAPPY v7: 纹理上传完成 bird=%u pipe=%u bg=%u base=%u",
+                        gl_bird[0], gl_pipe, gl_background, gl_base);
         }
     }
     
@@ -176,7 +189,7 @@ extern "C" void imapp_frame(double t) {
     #define GX(v) (origin.x + (v) * sx)
     #define GY(v) (origin.y + (v) * sy)
 
-    // 绘制背景（铺满内容区）
+    // 绘制背景（铺满内容区）；纹理未就绪时用纯色降级
     if (gl_background) {
         draw_texture(dl, gl_background, origin, area);
     } else {

@@ -1,16 +1,57 @@
-# Flappy Bird 纹理渲染调试手记（符号扩展 bug + 宿主窗口契约）
+# Flappy Bird 纹理渲染调试手记（三个 bug）
 
 **日期**: 2026-10-17
 **分支**: feature/flappy-bird
-**状态**: 主程序/插件已修复并编译；截图自动化验证管道已打通
+**状态**: ✅ 三个 bug 全部修复，截图验证纹理正常渲染
 
 ---
 
 ## 一句话结论
 
-画面空白是两个独立 bug 叠加：
-1. **符号扩展 bug**：GL 纹理 ID（32 位无符号）经过 `intptr_t`（32 位有符号）转 64 位 `ImTextureID` 时，ID ≥ 2^31 会被符号扩展成 `0xFFFFFFFFxxxxxxxx`，绑定无效纹理 → 画不出来。
+画面空白/白屏是**三个独立 bug 叠加**：
+1. **符号扩展 bug**：GL 纹理 ID（32 位无符号）经过 `intptr_t`（32 位有符号）转 64 位 `ImTextureID` 时，ID ≥ 2^31 会被符号扩展成 `0xFFFFFFFFxxxxxxxx`，绑定无效纹理。
 2. **宿主窗口契约 bug**：插件在 `imapp_frame` 里自己调了 `ImGui::Begin/End`，开了个"流氓"第二窗口，宿主开的 Flappy 窗口反而空着。
+3. **NPOT 纹理 bug**：N900 的 PowerVR SGX530 在 GLES 1.1 下不支持非二次幂纹理，`glTexImage2D(288×512)` 静默失败 → 纹理采样为白色。字体图集是 512×128（二次幂）所以一直正常，只有精灵图全白。
+
+修复顺序即发现顺序：1 → 2 → 3。最后 NPOT 修复后，截图显示天空蓝背景（39%）、绿管道（10%）、黄小鸟（0.25%）。
+
+---
+
+## Bug 3：NPOT 纹理（白屏的直接原因）
+
+### 现象
+前两个 bug 修完后，窗口内容仍是**纯白**——不是 ImGui 窗口背景色（navy），也不是降级用的天空蓝。白色是"纹理对象存在但无数据"的典型表现。
+
+### 决定性对照实验
+给插件加 `IMRUN_FLAPPY_NOTEX=1` 开关，强制走降级路径（不画纹理）：
+- 强制降级 → 天空蓝背景、绿管道、按钮全部正常显示（204789 像素天空蓝）
+- 走纹理路径 → 全白
+
+结论：**几何绘制机制完全正常，唯独纹理采样失败**。
+
+### 根因
+N900 GPU 是 PowerVR SGX530，GLES 1.1 且**没有 `GL_OES_texture_npot` 扩展**。非二次幂尺寸的 `glTexImage2D` 会被驱动静默拒绝，纹理停留在未初始化状态，采样返回白色。
+
+- 字体图集 512×128 → 二次幂 → 正常
+- background-day 288×512、pipe 52×320、base 336×112、bird 34×24 → 全非二次幂 → 全白
+
+证据吻合：只有 ImGui 控件（用字体）能显示，所有精灵图都画不出来。
+
+### 修复
+`upload_texture()` 里做 NPOT → POT 转换：非二次幂的位图用最近邻放大到下一个二次幂（UV 保持 0..1，因为放大后的图仍铺满整张纹理）。
+
+```c
+static int pot_up(int v) { int p = 1; while (p < v) p <<= 1; return p; }
+// 上传时若 (tw!=w || th!=h) 则先在 CPU 放大再 glTexImage2D
+```
+
+### 附带发现：上传时机
+插件原本调 `imrun_register_texture_and_get_id()`，该函数在**插件 UI 构建阶段**（渲染循环之前）立即上传 GL，此时 GL 上下文不一定 current。改为：
+- 插件只调 `imrun_register_texture()` 注册（加入 `UserTextures`）
+- 上传交给渲染循环的 `upload_texture()`
+- 插件在**下一帧**读 `td->GetTexID()` 拿真实 ID（符号扩展已修，安全）
+
+`imrun_register_texture_and_get_id()` 保留为兼容壳（返回 0）。
 
 ---
 

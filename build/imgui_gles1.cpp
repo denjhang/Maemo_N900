@@ -71,6 +71,12 @@ extern "C" void alog_public(const char *fmt, ...);
 #define GL_TEXTURE_WRAP_T  0x2803
 #define GL_CLAMP_TO_EDGE   0x812F
 
+/* N900 = PowerVR SGX530, GLES1.1 with NO GL_OES_texture_npot: a glTexImage2D
+   with a non-power-of-two size silently fails and the texture samples white.
+   So any NPOT bitmap is nearest-neighbour scaled up to the next POT; UVs stay
+   0..1 because the whole (scaled) image fills the POT texture. */
+static int pot_up(int v) { int p = 1; while (p < v) p <<= 1; return p; }
+
 static void upload_texture(ImTextureData *tex) {
     unsigned id = (unsigned)tex->TexID;
     if (id == 0) {
@@ -85,14 +91,26 @@ static void upload_texture(ImTextureData *tex) {
     int w = tex->Width, h = tex->Height;
     int pitch = tex->GetPitch();
     const unsigned char *px = (const unsigned char *)tex->GetPixels();
-    if (pitch == w * 4) {
+    int tw = pot_up(w), th = pot_up(h);
+    if (tw == w && th == h && pitch == w * 4) {
         gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
     } else {
-        unsigned char *tmp = new unsigned char[w * h * 4];
-        for (int y = 0; y < h; y++)
-            memcpy(tmp + y * w * 4, px + y * pitch, w * 4);
-        gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
+        unsigned char *tmp = new unsigned char[tw * th * 4];
+        for (int y = 0; y < th; y++) {
+            int sy = y * h / th;
+            const unsigned char *srow = px + sy * pitch;
+            unsigned char *drow = tmp + y * tw * 4;
+            for (int x = 0; x < tw; x++) {
+                int sx = x * w / tw;
+                memcpy(drow + x * 4, srow + sx * 4, 4);
+            }
+        }
+        gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
         delete[] tmp;
+        if (gl.GetErrorFn) {
+            unsigned e = ((unsigned (*)(void))gl.GetErrorFn)();
+            if (e) alog_public("upload_texture: GL错误 0x%x (%dx%d->%dx%d id=%u)", e, w, h, tw, th, id);
+        }
     }
     tex->SetTexID((ImTextureID)id);
     tex->SetStatus(ImTextureStatus_OK);
@@ -150,51 +168,20 @@ extern "C" ImTextureData* imrun_load_png(const char *path) {
     return tex;
 }
 
-// Register a plugin texture and return the actual OpenGL TexID after upload
-// IMPORTANT: Call this after imrun_load_png(), then wait 1 frame before using the TexID
-extern "C" unsigned imrun_register_texture_and_get_id(ImTextureData *tex) {
-    if (!tex) return 0;
-    
-    // Register to UserTextures for persistent management
-    ImGui::RegisterUserTexture(tex);
-    
-    // Force immediate upload (normally happens in render loop)
-    if (tex->Status == ImTextureStatus_WantCreate) {
-        unsigned id = 0;
-        gl.GenTextures(1, &id);
-        gl.BindTexture(GL_TEXTURE_2D, id);
-        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        
-        int w = tex->Width, h = tex->Height;
-        int pitch = tex->GetPitch();
-        const unsigned char *px = (const unsigned char *)tex->GetPixels();
-        
-        if (pitch == w * 4) {
-            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-        } else {
-            unsigned char *tmp = new unsigned char[w * h * 4];
-            for (int y = 0; y < h; y++)
-                memcpy(tmp + y * w * 4, px + y * pitch, w * 4);
-            gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
-            delete[] tmp;
-        }
-        
-        tex->SetTexID((ImTextureID)id);
-        tex->SetStatus(ImTextureStatus_OK);
-        
-        return id;  // Return the actual GL texture ID
-    }
-    
-    return 0;
-}
-
-// Original registration function (kept for compatibility)
+// Register a plugin texture. Upload is DEFERRED to the render loop
+// (upload_texture() with NPOT->POT conversion), because this is called from
+// inside the UI-build phase where the GL context is not guaranteed current.
+// Read the real GL id via tex->GetTexID() one frame later.
 extern "C" void imrun_register_texture(ImTextureData *tex) {
     if (!tex) return;
     ImGui::RegisterUserTexture(tex);
+}
+
+// Kept for source compatibility; returns 0 (id is not known until next frame).
+extern "C" unsigned imrun_register_texture_and_get_id(ImTextureData *tex) {
+    if (!tex) return 0;
+    ImGui::RegisterUserTexture(tex);
+    return 0;
 }
 int igui_init(int w, int h, IGlfns *fns) {
     gl = *fns;

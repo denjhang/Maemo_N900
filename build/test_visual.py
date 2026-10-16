@@ -138,8 +138,8 @@ def main():
     if not capture_only:
         here = os.path.dirname(os.path.abspath(__file__))
         deploy_and_run(c,
-                       os.path.join(here, 'gldemo_v047_fixed'),
-                       os.path.join(here, 'flappy_v7_fixed.so'))
+                       os.path.join(here, 'gldemo_v047'),
+                       os.path.join(here, 'flappy_v7.so'))
         time.sleep(4)   # let the menu settle / textures upload
 
     print('[*] capturing framebuffer')
