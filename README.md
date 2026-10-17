@@ -57,7 +57,7 @@
 ```
 game/               skyraid —— pygame 横版飞机大战（PC/N900 双端，真机可玩）
 symbian/            PyS60 远程 agent（TCP 执行/截屏/文件通道）
-j2me/               （规划中）S40 实时 PSG 播放器
+j2me/               J2ME 开发工作区（交接见 j2me/HANDOFF.md；工具/模拟器不入库）
 build/              交叉编译工作区（hello/alsa_test/libao 等）
 crossenv/           交叉编译工具链配方（已验证真机运行）
 tools/              辅助脚本

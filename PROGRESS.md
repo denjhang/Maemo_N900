@@ -509,7 +509,7 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   STC 版核心可移植性=纯 C，几乎免改造
 
 ### 廿二补充：J2ME 参考项目落实（MIDPlay）
-- **MIDPlay**（phd051199, ★80, J2ME 在线音乐播放器）已收至 research/midplay/
+- **MIDPlay**（phd051199, ★80, J2ME 在线音乐播放器）已收至 j2me/references/midplay/
 - 关键实证：`Manager.createPlayer(InputStream, contentType)` 流式播放范式，
   生产级细节全有：content-type 候选协商、创建重试+瞬态失败标记、
   分片创建防卡死、自定义 BufferedInputStream、URL/InputStream 双模式
@@ -520,7 +520,7 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   反面教材，与我们无关；GitHub 无 J2ME 真软件合成先例 → 我们写即参考实现
 
 ### 廿二再补充：FPlay J2ME（carlosrafaelgn）——J2ME 播放器工程完整体
-- 已收至 research/fplay/（86 个 java 文件，目标机型 Nokia 3120c 弱 S40，MIT）
+- 已收至 j2me/references/fplay/（86 个 java 文件，目标机型 Nokia 3120c 弱 S40，MIT）
 - 播放=URL locator 三件套：file:///（本地）、**capture://radio?f=...M（把手机
   FM 调谐器硬件包成 Player 源，白嫖收音机功能）**、getEncodedURL（转义）
 - EQ=JSR-234 amms EqualizerControl 全局控制+能力探测降级；
@@ -545,7 +545,7 @@ C/GLES 版游戏是降维参照；对 VGM 的 FM 核心（Gens 系快速整数�
   一律不碰）——FPlay 用 JSR-234 EQ 都得写降级探测，我们零可选包零探测
 
 ### 廿二再补充3：J2ME Loader 判决 + 空子（源码级，nikita36078/J2ME-Loader）
-已收至 research/j2meloader/（2688★ 官方仓）
+已收至 j2me/references/j2meloader/（2688★ 官方仓）
 - **实时流式必死**：createPlayer(InputStream) 同步把流灌进临时文件到 EOF
   才返回（InternalDataSource 构造函数 while 循环）——无限流=永久阻塞
 - **空子**：`stream.available()` 用于预分配临时文件长度（raf.setLength）。

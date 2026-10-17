@@ -10,3 +10,9 @@ research/*
 research/sistools/sisinfo-master/
 research/sistools/af_frames/
 research/sistools/pc_frames/
+
+# j2me/ 只入库文档与自研代码；工具/模拟器/素材（约 878MB）留本地
+j2me/tools/
+j2me/emulators/
+j2me/references/
+j2me/assets/
