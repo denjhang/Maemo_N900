@@ -113,6 +113,7 @@ EOF
 | **vgmplayer** | `research/apps/vgmplayer/vgm.cpp` | VGM 音乐播放器（YM2612/AY8910 芯片模拟） |
 | **appmgr** | `research/apps/appmgr/appmgr.cpp` | 应用管理器（安装/卸载/刷新插件） |
 | **system** | `research/apps/system/system.cpp` | 系统设置（音量/亮度/字体等） |
+| **flappy** | `research/apps/flappy/flappy_v7.cpp` | Flappy Bird（PNG 纹理 + 触摸输入 + 竖屏窗口） |
 
 ### 编译命令
 
@@ -129,11 +130,29 @@ arm-linux-gnueabi-g++ $F research/apps/demo/demo.cpp -o build/demo.so
 arm-linux-gnueabi-g++ $F research/apps/vgmplayer/vgm.cpp -o build/vgmplayer.so
 arm-linux-gnueabi-g++ $F research/apps/appmgr/appmgr.cpp -o build/appmgr.so
 arm-linux-gnueabi-g++ $F research/apps/system/system.cpp -o build/system.so
+arm-linux-gnueabi-g++ $F research/apps/flappy/flappy_v7.cpp -o build/flappy.so
 
 echo "BUILD_OK"
-ls -lh build/*.so | grep -E "demo|vgmplayer|appmgr|system"
+ls -lh build/*.so
 EOF
 ```
+
+### 带外部素材的插件（flappy 示例）
+
+flappy 用 PNG 素材，插件本体和素材要分开放：
+
+```
+/home/user/imrun/apps/flappy/
+├── app.so
+└── assets/
+    ├── background-day.png
+    ├── pipe-green.png
+    ├── base.png
+    └── bluebird-*.png
+```
+
+素材源：`assets/flappy-bird-assets/sprites/`（MIT 授权）。
+打包脚本 `make_release_v048.sh` 的 `deploy.sh` 会自动创建 assets 目录并上传。
 
 ### 插件接口规范
 
@@ -141,7 +160,7 @@ EOF
 
 ```cpp
 extern "C" {
-    // 必需：每帧渲染函数
+    // 必需：每帧渲染函数（宿主已开好窗口，不要再 Begin/End）
     void imapp_frame(double t);
     
     // 可选：应用名称
@@ -153,10 +172,15 @@ extern "C" {
     // 可选：销毁函数
     void imapp_destroy(void);
     
-    // 可选：系统信息
-    const char *imapp_system(void);
+    // 可选：系统插件标记（返回1=不可卸载）
+    int imapp_system(void);
+    
+    // 可选：首选窗口尺寸（竖屏/特殊比例应用）
+    void imapp_pref_size(float *w, float *h);
 }
 ```
+
+完整契约与踩坑说明见 [PLUGIN_DEV_GUIDE.md](./PLUGIN_DEV_GUIDE.md)。
 
 ### 关键插件编译选项
 
@@ -287,25 +311,35 @@ wsl sudo ln -sf /opt/sysroot/usr/lib/libpulse.so.0 /opt/sysroot/usr/lib/libpulse
 
 ## 版本历史
 
+### v0.4.48 (2026-10-17)
+- ✅ PNG 纹理加载（`imrun_load_png` / `imrun_register_texture`，stb_image）
+- ✅ 新增 `imapp_pref_size()` 窗口尺寸声明机制
+- ✅ flappy 插件（竖屏 400×420，触摸/键盘输入）
+- 🐛 修复三个渲染 bug：符号扩展 / 宿主窗口契约 / NPOT 纹理
+- ✅ 自动化视觉验证（fb0 截图 + XTEST 点击注入）
+
 ### v0.4.46r (2026-10-16)
 - ✅ PULSE 后端完整实现
 - ✅ 4后端并存（SDL/plughw、PULSE、ALSA、libao）
 - ✅ 系统音量实时响应
 - ✅ 48000Hz 零重采样
 
-### 文件清单
+### 文件清单（v0.4.48）
 ```
-主程序: gldemo_imguibin (md5: a05fe3b8d77eaf24c35c1fc7e906a274)
+主程序: gldemo_v048 (md5: 189ce16d567501d43aa082af1cf6a5c0)
 插件:
   - demo.so (~12KB)
   - vgmplayer.so (~23KB)
   - appmgr.so (~11KB)
   - system.so (~12KB)
+  - flappy.so (~17KB, + 26 个 PNG 素材)
 ```
 
 ## 参考文档
 
+- [插件开发指南](./PLUGIN_DEV_GUIDE.md) - 插件 API 详细说明（含纹理/输入/窗口尺寸）
+- [纹理调试手记](./FLAPPY_TEXTURE_DEBUG_NOTES.md) - 三个渲染 bug 的完整证据链
+- [自动化视觉验证](./N900_AUTO_VISUAL_TEST.md) - 截图 + 输入注入方法
 - [热重载实现](./HOTRELOAD_IMPLEMENTATION.md) - 插件热重载机制
-- [插件开发指南](./PLUGIN_DEV_GUIDE.md) - 插件 API 详细说明
 - [PULSE 后端实现](./PULSE_BACKEND_IMPLEMENTATION.md) - 音频后端架构
 - [主程序详细文档](../build/GLDEMO_IMGUI.md) - 完整技术细节

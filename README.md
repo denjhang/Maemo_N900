@@ -12,7 +12,7 @@
 - Symbian S60v3 生态考古：模拟器、补丁、闭源应用开膛分析
 - J2ME 时代的音频输出路线研究（实时合成 / MIDI 转译 / 离线渲染）
 
-## 核心成果（v0.4.46r）
+## 核心成果（v0.4.48）
 
 ### IMRUN —— ImGui Runtime on N900
 
@@ -29,9 +29,19 @@
 - 48000Hz 零重采样 → 600MHz 单核流畅播放 20 秒无断流
 - AOTEST 自动化压力测试：4 后端 × 10 轮 × 快速 PLAY/STOP 全通过
 
+**v0.4.48 新增——PNG 纹理 + 插件图形能力**：
+- 插件可加载外部 PNG 素材（stb_image），Flappy Bird 为参考实现
+- 新增 `imapp_pref_size()`：插件声明窗口尺寸（竖屏游戏）
+- 触摸/键盘输入规范（窗口内点击限定，避免误触）
+- 踩平三个渲染坑：GL id 符号扩展、宿主窗口契约、PowerVR 的 NPOT 限制
+- **自动化视觉验证**：`/dev/fb0` 截图 + XTEST 点击注入，不靠人眼看屏幕
+
 **完整文档**：
-- `docs/PULSE_BACKEND_IMPLEMENTATION.md` —— 实现详解（根因分析 + 代码结构 + 故障排查）
-- `docs/AUDIO_BACKENDS.md` —— 架构全貌（4 后端对比 + PicoDrive 先例论证）
+- `docs/PLUGIN_DEV_GUIDE.md` —— 插件开发（纹理/输入/窗口尺寸/踩坑）
+- `docs/FLAPPY_TEXTURE_DEBUG_NOTES.md` —— 三个渲染 bug 的完整证据链
+- `docs/N900_AUTO_VISUAL_TEST.md` —— 截图 + 输入注入方法论
+- `docs/PULSE_BACKEND_IMPLEMENTATION.md` —— 音频实现详解
+- `docs/AUDIO_BACKENDS.md` —— 音频架构全貌（4 后端对比）
 
 ## 设备档案
 

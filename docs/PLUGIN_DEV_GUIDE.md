@@ -2,6 +2,9 @@
 
 > 本文档基于 IMRUN 源码实证编写（`build/imgui_gles1.cpp` dyn_scan + `build/gldemo_imgui.c` 宿主符号 +
 > `research/apps/` 下全部已验证插件），不是推测。每一条都标注了源码出处。
+>
+> **最后更新**: 2026-10-17（v0.4.48）—— 新增窗口尺寸（`imapp_pref_size`）、
+> 输入约定（触摸/键盘）、PNG 纹理（含三个必踩的坑）、自动化验证方法。
 
 ## 1. 什么是一个 IMRUN 插件
 
@@ -27,9 +30,19 @@ manifest——放进去就生效（启动时扫描，最多 8 个）。
 | `imapp_init` | 可选 | `int imapp_init(void)` | 加载时调一次，返回非 0 = 拒绝加载 |
 | `imapp_destroy` | 可选 | `void imapp_destroy(void)` | 关窗口/卸载时调用——**释放资源（停音频/震动）的唯一钩子** |
 | `imapp_system` | 可选 | `int imapp_system(void)` | 返回 1 = 系统插件，不可卸载 |
+| `imapp_pref_size` | 可选 | `void imapp_pref_size(float* w, float* h)` | 声明首选窗口尺寸（见 §4.5）。缺省 = 宿主默认 440×320 |
 
-源码出处：`imgui_gles1.cpp:565-577`（dlopen 后逐个 dlsym 这些符号）。
-`imapp_frame` 是硬门槛（`:567-568` 缺了就 `dlclose` 跳过）。
+源码出处：`imgui_gles1.cpp` 的 `dyn_scan()`（dlopen 后逐个 dlsym 这些符号）。
+`imapp_frame` 是硬门槛（缺了就 `dlclose` 跳过）。
+
+### ⚠️ 窗口是宿主的，不要自己 Begin/End
+
+`imapp_frame` **被调用时宿主已经 `ImGui::Begin()` 了你的窗口**，返回后宿主 `End()`。
+所以：
+- **不要**在 `imapp_frame` 里调 `ImGui::Begin/End`——那会开出一个"流氓"第二窗口，
+  而宿主窗口是空的（v7 踩过这个坑，表现为"窗口一片空白"）。
+- 直接用 `ImGui::GetWindowDrawList()` / `ImGui::GetWindowPos()` 画内容。
+- 用 `ImGui::SetCursorPos(...)` 放 ImGui 控件（相对窗口内容区）。
 
 ## 3. 最小插件模板
 
@@ -109,6 +122,95 @@ ssh.exec_command('pkill -f imrun; sleep 2')
 # 启动 GUI（见第 8 节环境速查）
 ```
 
+## 4.5 窗口尺寸（可选）
+
+默认窗口 440×320。非标准比例的应用（如竖屏游戏）导出：
+
+```cpp
+extern "C" void imapp_pref_size(float *w, float *h) {
+    *w = 400.0f;   /* 竖屏：窄 */
+    *h = 420.0f;   /* 桌面可用高 = 480 - 48(系统栏) = 432 */
+}
+```
+
+宿主行为：
+- `dyn_scan` 时 dlsym 读取，存进 `DynApp.pref_w/pref_h`
+- 应用**首次打开**时用 `ImGuiCond_Always` 强制应用一次
+- 能覆盖 `imrun.ini` 里存的旧尺寸（否则旧值靠 `FirstUseEver` 永久生效）
+- 之后用户手动拖拽调整的尺寸仍会被 ini 记住
+
+源码：`imgui_gles1.cpp` 的 `shell_begin_dyn()`。
+
+## 4.6 输入（触摸 / 键盘）
+
+触摸屏点击 = 核心 X 指针（ButtonPress/Release），运行时已喂给 ImGui。
+**判断"点在我窗口上"必须用窗口 hover 限定**：
+
+```cpp
+bool tapped = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+              ImGui::IsMouseClicked(0);
+bool keyed  = ImGui::IsKeyPressed(ImGuiKey_Space) ||
+              ImGui::IsKeyPressed(ImGuiKey_UpArrow) ||
+              ImGui::IsKeyPressed(ImGuiKey_Enter);
+```
+
+为什么不能只写 `ImGui::IsMouseClicked(0)`：那是全局状态，点标题栏、桌面、
+任务栏都会误触发（早期版本踩过）。
+
+N900 的电阻屏没有独立触摸事件，触摸 = 鼠标左键，所以以上对触摸和鼠标通用。
+
+## 4.7 PNG 纹理（图片素材）
+
+主程序集成了 stb_image，插件可加载外部 PNG 当纹理用。
+
+```cpp
+struct ImTextureData;
+extern "C" ImTextureData* imrun_load_png(const char *path);
+extern "C" void imrun_register_texture(ImTextureData *tex);
+
+static ImTextureData *td = nullptr;
+static unsigned gl_tex = 0;
+
+/* 第一帧：加载 + 注册（此时 GL 上下文不一定 current，不能自己上传） */
+if (!td) {
+    td = imrun_load_png("/home/user/imrun/apps/myapp/assets/bg.png");
+    if (td) imrun_register_texture(td);   /* 上传交给渲染循环 */
+}
+/* 下一帧起：读真实 GL id（渲染循环已上传） */
+if (td && !gl_tex) gl_tex = (unsigned)td->GetTexID();
+/* 绘制 */
+if (gl_tex)
+    ImGui::GetWindowDrawList()->AddImage((ImTextureID)gl_tex, p0, p1);
+```
+
+### 三个必须知道的坑
+
+1. **必须 `imrun_register_texture()`**
+   ImGui 的 `PlatformIO.Textures` **每帧**被 `UpdateTexturesEndFrame()` 清空重建。
+   直接 `push_back` 进去的纹理会丢。必须走 `ImGui::RegisterUserTexture()`
+   （`imrun_register_texture` 内部就是调它，加到持久的 `UserTextures`）。
+
+2. **GL id 要零扩展，不能走 `intptr_t`**
+   `ImTextureID` 是 64 位 `ImU64`，而 GL id 是 32 位无符号。
+   `(ImTextureID)(intptr_t)id` 在 32 位 ARM 上会**符号扩展**：id ≥ 2^31 时
+   变成 `0xFFFFFFFFxxxxxxxx`，绑定无效纹理（画不出来）。
+   正确写法：`(ImTextureID)id` —— `unsigned` 直接转 u64 是零扩展。
+
+3. **非二次幂（NPOT）纹理在 N900 上不可用**
+   PowerVR SGX530 的 GLES 1.1 没有 `GL_OES_texture_npot`，
+   `glTexImage2D(288×512)` 会被驱动静默拒绝 → 纹理采样为白色。
+   主程序 `upload_texture()` 已自动把 NPOT 放大到下一个 POT，
+   所以插件只管提供图，不用管尺寸。但**知道这点**很重要：
+   看到"图全白、字体正常"就是 NPOT 症状（字体图集 512×128 是 POT）。
+
+### 素材放哪
+
+```
+/home/user/imrun/apps/<id>/assets/*.png
+```
+插件内用绝对路径加载。参考实现：`research/apps/flappy/flappy_v7.cpp`。
+技术细节与完整调试过程：[FLAPPY_TEXTURE_DEBUG_NOTES.md](./FLAPPY_TEXTURE_DEBUG_NOTES.md)。
+
 ## 5. 宿主供给的符号（主程序 --export-dynamic 导出）
 
 主程序编译时带 `-Wl,--export-dynamic`（`b_imgui_export.sh`），全部全局符号对插件可见。
@@ -144,6 +246,9 @@ C++ mangled 符号都导出了。插件只需 `#include "imgui.h"`，链接时�
 | `imrun_now` | `double imrun_now(void)` | 相对秒时钟（禁止自己取 epoch） | imgui_gles1.cpp |
 | `vibra_ping` | `void vibra_ping(int ms)` | 震动 ms 毫秒 | `gldemo_imgui.c:633` |
 | `vibra_stop` | `void vibra_stop(void)` | 停震动 | |
+| `imrun_load_png` | `ImTextureData* imrun_load_png(const char*)` | 加载 PNG 为纹理（见 §4.7） | imgui_gles1.cpp |
+| `imrun_register_texture` | `void imrun_register_texture(ImTextureData*)` | 注册纹理，上传交给渲染循环 | imgui_gles1.cpp |
+| `alog_public` | `void alog_public(const char*, ...)` | 写 `/home/user/audio_dbg.log` | |
 
 ### 宿主变量
 
@@ -282,6 +387,21 @@ if (audio_source_fn) {
 - **AOTEST 标记文件**：如果 `/home/user/aotest` 存在，imrun 启动后立刻跑音频回归测试
   然后 `exit(0)` 闪退——桌面不会出现。测试完删掉它：`rm -f /home/user/aotest`。
 - **/tmp 只有 1MB**：tmpfs 挂载，编译产物不要留在设备 /tmp。
+- **画面空白 ≠ 代码没跑**：先分清三种情况——
+  1. 窗口里 ImGui 控件（文字/按钮）能显示，但图/矩形不显示 → 你可能自己调了
+     `ImGui::Begin/End`，内容画到流氓窗口去了（见 §2 警告）。
+  2. 文字正常但图片全白 → NPOT 纹理问题（见 §4.7 坑 3）。
+  3. 什么都不显示 → 检查 `imapp_frame` 是否真的被调用（`alog_public` 打一行）。
+
+### 自动化验证（不用人眼看屏幕）
+
+- **截图**：`/dev/fb0` 可直接读（800×480，16bpp RGB565，stride 4096）。
+  设备没有 base64、/tmp 很小 → 必须走 SSH 通道流式读 `dd if=/dev/fb0`。
+  现成脚本：`build/test_visual.py`。
+- **注入点击**：用 XTEST（`libXtst.so.6` 的 `XTestFakeMotionEvent/ButtonEvent`）。
+  **不要用 uinput 合成设备**——xorg.conf 静态绑定了 TSC2005，Xorg 不认新设备。
+  现成脚本：`build/xtest_tap.py <x> <y> [hold_ms]`（需 `DISPLAY=:0`）。
+- 完整方法论：[N900_AUTO_VISUAL_TEST.md](./N900_AUTO_VISUAL_TEST.md)。
 
 ## 10. 已验证的插件参考
 
@@ -292,6 +412,7 @@ if (audio_source_fn) {
 | system | `research/apps/system/system.cpp` | 设置（WALLPAPER/DISPLAY/AUDIO/INFO/ABOUT） | 系统插件（`imapp_system()=1` 不可卸载）；v0.4.45+ 含 AUDIO 标签（后端切换+TONEGEN） |
 | appmgr | `research/apps/appmgr/appmgr.cpp` | 应用管理（安装/卸载/重排） | 调 `imrun_dyn_*` 系列函数 |
 | vgmplayer | `research/apps/vgmplayer/vgm.cpp` | VGM/VGZ 播放器 | `audio_source_fn` 喂采样范例 |
+| flappy | `research/apps/flappy/flappy_v7.cpp` | Flappy Bird 游戏 | **PNG 纹理范例** + 竖屏窗口（`imapp_pref_size`）+ 触摸输入 |
 
 ## 11. 完整构建脚本
 
